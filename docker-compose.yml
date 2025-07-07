@@ -1,0 +1,21 @@
+services:
+  node1:
+    hostname: node1
+    build: .
+    command: ["--port=9001", "--peers=node2:9002,node3:9003"]
+    ports:
+      - "9001:9001/udp"
+
+  node2:
+    hostname: node2
+    build: .
+    command: ["--port=9002", "--peers=node1:9001,node3:9003"]
+    ports:
+      - "9002:9002/udp"
+
+  node3:
+    hostname: node3
+    build: .
+    command: ["--port=9003", "--peers=node1:9001,node2:9002"]
+    ports:
+      - "9003:9003/udp"
