@@ -1,2 +1,7 @@
 docker compose down
 docker compose up --build
+
+
+
+
+ docker run --rm   --network progettosdcc_default   --name client --hostname client   --entrypoint "" progettosdcc-node1   /usr/local/bin/gossip-node     --id=client:9004     --port=9004     --peers=node1:9001,node2:9002,node3:9003     --lookup=payments
