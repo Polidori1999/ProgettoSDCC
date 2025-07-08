@@ -2,223 +2,124 @@ package node
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"ProgettoSDCC/pkg/proto"
 )
 
-/*───────────────────────────  stato  ───────────────────────────*/
-
 type Node struct {
-	ID   string
-	Port int
-
-	Services     map[string]bool                 // servizi che offro
-	ServiceTable map[string]map[string]time.Time // servizio ⇒ provider ⇒ ts
-	Peers        map[string]bool                 // peer conosciuti
-	LastSeen     map[string]time.Time            // ultimo HB ricevuto
-
-	mu sync.Mutex
+	PeerMgr  *PeerManager
+	Registry *ServiceRegistry
+	Digests  *DigestManager
+	GossipM  *GossipManager
+	FailureD *FailureDetector
+	ID       string
+	Port     int
 }
-
-/*───────────────────────────  ctor  ───────────────────────────*/
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	parts := strings.Split(id, ":")
 	if len(parts) != 2 {
-		log.Fatalf("invalid id %s (want host:port)", id)
+		log.Fatalf("invalid id %s", id)
 	}
 	port, err := strconv.Atoi(parts[1])
 	if err != nil {
-		log.Fatalf("bad port in id: %v", err)
+		log.Fatalf("bad port: %v", err)
 	}
 
-	n := &Node{
-		ID:           id,
-		Port:         port,
-		Services:     csvToSet(svcCSV),
-		ServiceTable: map[string]map[string]time.Time{},
-		Peers:        map[string]bool{},
-		LastSeen:     map[string]time.Time{},
-	}
+	pm := NewPeerManager(strings.Split(peerCSV, ","), id)
+	reg := NewServiceRegistry()
+	reg.AddLocal(id, svcCSV)
 
-	now := time.Now()
-	for s := range n.Services {
-		if n.ServiceTable[s] == nil {
-			n.ServiceTable[s] = map[string]time.Time{}
-		}
-		n.ServiceTable[s][id] = now
-	}
-	for _, p := range strings.Split(peerCSV, ",") {
-		if p = strings.TrimSpace(p); p != "" && p != id {
-			n.Peers[p] = true
-			n.LastSeen[p] = now
-		}
-	}
-	return n
-}
+	dm := NewDigestManager()
+	gm := NewGossipManager(pm, dm, reg, id)
+	fd := NewFailureDetector(pm, reg, 10*time.Second)
 
-func csvToSet(csv string) map[string]bool {
-	m := map[string]bool{}
-	for _, x := range strings.Split(csv, ",") {
-		if x = strings.TrimSpace(x); x != "" {
-			m[x] = true
-		}
-	}
-	return m
-}
-
-/*──────────────────────  helper thread-safe  ───────────────────*/
-
-func (n *Node) PeerList() []string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	out := make([]string, 0, len(n.Peers))
-	for p := range n.Peers {
-		out = append(out, p)
-	}
-	return out
-}
-
-func (n *Node) serviceList() []string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	out := make([]string, 0, len(n.Services))
-	for s := range n.Services {
-		out = append(out, s)
-	}
-	return out
-}
-
-/*────────────────────────  gossip sender  ──────────────────────*/
-
-func (n *Node) GossipLoop() {
-	t := time.NewTicker(3 * time.Second)
-	defer t.Stop()
-	for range t.C {
-		msg := n.heartbeatMessage() // in msgfactory.go
-		for _, p := range n.PeerList() {
-			n.sendUDP(msg, p)
-		}
+	return &Node{
+		PeerMgr:  pm,
+		Registry: reg,
+		Digests:  dm,
+		GossipM:  gm,
+		FailureD: fd,
+		ID:       id,
+		Port:     port,
 	}
 }
 
-func (n *Node) sendUDP(data []byte, peer string) {
-	addr, err := net.ResolveUDPAddr("udp", peer)
+func (n *Node) Run(lookupSvc string) {
+	// 1. Avvia gossip e failure detector
+	n.GossipM.Start()
+	n.FailureD.Start()
+
+	// 2. Apri socket UDP
+	addr := &net.UDPAddr{Port: n.Port, IP: net.IPv4zero}
+	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
-		return
+		log.Fatalf("ListenUDP: %v", err)
 	}
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		return
-	}
-	conn.Write(data)
-	conn.Close()
-}
+	defer conn.Close()
 
-/*───────────────────────  gossip receiver  ────────────────────*/
-
-func (n *Node) HandleGossip(buf []byte) {
-	env, err := proto.Decode(buf)
-	if err != nil {
-		return
-	}
-	switch env.Type {
-
-	case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
-		var hb proto.Heartbeat
-		if json.Unmarshal(env.Data, &hb) != nil {
-			return
-		}
-		n.handleHeartbeat(env.From, hb)
-
-	case proto.MsgRumor:
-		var rm proto.Rumor
-		if json.Unmarshal(env.Data, &rm) != nil {
-			return
-		}
-		n.handleRumor(rm)
-
-	default:
-		log.Printf("unknown msg type %d", env.Type)
-	}
-}
-
-func (n *Node) handleHeartbeat(sender string, hb proto.Heartbeat) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if !n.Peers[sender] {
-		n.Peers[sender] = true
-		log.Printf("Peer %s joined", sender)
-	}
-	n.LastSeen[sender] = time.Now()
-
-	/* 👇 VERBOSE LOG ad ogni heartbeat */
-	log.Printf("HB from %-12s services=%v digest=%s", sender, hb.Services, hb.Digest)
-
-	now := time.Now()
-	for _, s := range hb.Services {
-		if n.ServiceTable[s] == nil {
-			n.ServiceTable[s] = map[string]time.Time{}
-		}
-		n.ServiceTable[s][sender] = now
-	}
-}
-
-func (n *Node) handleRumor(r proto.Rumor) {
-	log.Printf("received rumor %s (%d bytes)", r.RumorID, len(r.Payload))
-}
-
-/*─────────────────────  failure detector  ─────────────────────*/
-
-func (n *Node) FailureDetectorLoop() {
-	timeout := 10 * time.Second
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
-
-	for range t.C {
-		n.mu.Lock()
-		now := time.Now()
-		for peer, last := range n.LastSeen {
-			if now.Sub(last) > timeout {
-				delete(n.Peers, peer)
-				delete(n.LastSeen, peer)
-				for svc, providers := range n.ServiceTable {
-					delete(providers, peer)
-					if len(providers) == 0 {
-						delete(n.ServiceTable, svc)
+	// 3. Goroutine di lettura gossip
+	done := make(chan struct{})
+	go func() {
+		buf := make([]byte, 4_096)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				nRead, _, err := conn.ReadFromUDP(buf)
+				if err != nil {
+					if strings.Contains(err.Error(), "closed network connection") {
+						return
 					}
+					log.Printf("ReadUDP: %v", err)
+					continue
 				}
-				log.Printf("Peer %s DEAD", peer)
+				env, err := proto.Decode(buf[:nRead])
+				if err != nil {
+					continue
+				}
+				switch env.Type {
+				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
+					var hb proto.Heartbeat
+					if json.Unmarshal(env.Data, &hb) == nil {
+						n.PeerMgr.Add(env.From)
+						n.PeerMgr.Seen(env.From)
+						n.Registry.Update(env.From, hb.Services)
+						log.Printf("HB from %-12s services=%v digest=%s", env.From, hb.Services, hb.Digest)
+					}
+				case proto.MsgRumor:
+					// TODO: rumor handling
+				default:
+					log.Printf("unknown msg type %d", env.Type)
+				}
 			}
 		}
-		n.mu.Unlock()
-	}
-}
+	}()
 
-/*──────────────────────────  lookup  ──────────────────────────*/
+	// 4. Se c'è lookup: aspetta convergenza, esegui lookup, poi chiudi e termina
+	if lookupSvc != "" {
+		log.Printf("Waiting for heartbeats before lookup…")
+		time.Sleep(8 * time.Second)
 
-func (n *Node) Lookup(service string) (string, bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	prov := n.ServiceTable[service]
-	if len(prov) == 0 {
-		return "", false
-	}
-	i := rand.Intn(len(prov))
-	j := 0
-	for p := range prov {
-		if j == i {
-			return p, true
+		if p, ok := n.Registry.Lookup(lookupSvc); ok {
+			fmt.Printf("Service %s → %s\n", lookupSvc, p)
+		} else {
+			fmt.Printf("Service %s NOT found\n", lookupSvc)
 		}
-		j++
+
+		// pulizia
+		close(done)
+		conn.Close()
+		return
 	}
-	return "", false
+
+	// 5. Nodo normale: non esce mai
+	select {}
 }

@@ -1,59 +1,50 @@
 package node
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
-	"sort"
-	"strings"
+	"log"
 
 	"ProgettoSDCC/pkg/proto"
 )
 
-// ──────────────────────────────────────────────────────────
-// -- digest di membership + servizi
-// ──────────────────────────────────────────────────────────
+// MakeHeartbeatWithDigest costruisce un heartbeat con digest usando la nuova API di proto.Encode.
+func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string) []byte {
 
-func (n *Node) computeDigestUnlocked() string {
-	peers := make([]string, 0, len(n.Peers))
-	for p := range n.Peers {
-		peers = append(peers, p)
-	}
-	sort.Strings(peers)
-
-	svcs := make([]string, 0, len(n.Services))
-	for s := range n.Services {
+	// raccogli servizi locali
+	svcs := make([]string, 0, len(reg.Table))
+	for s := range reg.Table {
 		svcs = append(svcs, s)
 	}
-	sort.Strings(svcs)
 
-	sum := sha1.Sum([]byte(strings.Join(append(peers, svcs...), ";")))
-	return hex.EncodeToString(sum[:])
-}
-
-func (n *Node) computeDigest() string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.computeDigestUnlocked()
-}
-
-// ──────────────────────────────────────────────────────────
-// -- costruzione heartbeat (header + payload)
-// ──────────────────────────────────────────────────────────
-
-func (n *Node) heartbeatMessage() []byte {
-	n.mu.Lock()
-	svcs := make([]string, 0, len(n.Services))
-	for s := range n.Services {
-		svcs = append(svcs, s)
+	hb := proto.Heartbeat{
+		Services: svcs,
+		Digest:   digest,
 	}
-	digest := n.computeDigestUnlocked()
-	n.mu.Unlock()
 
-	hb := proto.Heartbeat{Services: svcs, Digest: digest}
-	raw, err := proto.Encode(proto.MsgHeartbeatDigest, n.ID, hb)
+	// ora basta chiamare Encode direttamente
+	out, err := proto.Encode(proto.MsgHeartbeatDigest, fromID, hb)
 	if err != nil {
-		// errore di codifica: improduttivo loggare qui dentro il factory
-		return nil
+		log.Fatalf("failed to Encode HeartbeatWithDigest: %v", err)
 	}
-	return raw
+	return out
+}
+
+// MakeHeartbeat costruisce un heartbeat “normale” (senza digest esplicito).
+func MakeHeartbeat(reg *ServiceRegistry, fromID string) []byte {
+	svcs := make([]string, 0, len(reg.Table))
+	for s := range reg.Table {
+		svcs = append(svcs, s)
+	}
+
+	hb := proto.Heartbeat{
+		Services: svcs,
+		// Digest verrà calcolato internamente da proto.Encode se necessario,
+		// oppure puoi passarlo a mano qui come stringa vuota.
+	}
+
+	out, err := proto.Encode(proto.MsgHeartbeat, fromID, hb)
+
+	if err != nil {
+		log.Fatalf("failed to Encode Heartbeat: %v", err)
+	}
+	return out
 }

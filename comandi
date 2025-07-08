@@ -5,3 +5,20 @@ docker compose up --build
 
 
  docker run --rm   --network progettosdcc_default   --name client --hostname client   --entrypoint "" progettosdcc-node1   /usr/local/bin/gossip-node     --id=client:9004     --port=9004     --peers=node1:9001,node2:9002,node3:9003     --lookup=payments
+
+
+
+ 
+ peers.go: gestione thread-safe dei peer
+
+ registry.go: tabella servizi + lookup
+
+ digest.go: calcolo e confronto digest
+
+ msgfactory.go: costruzione heartbeat con digest
+
+ gossip.go: invio selettivo di heartbeat solo se il digest è cambiato
+
+ failure.go: rimozione peer morti
+
+ node.go: orchestri tutto e fornisci l’entrypoint

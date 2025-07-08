@@ -1,0 +1,301 @@
+🧱 Componenti principali
+1. Node
+
+📄 File: node.go
+
+🧠 Responsabilità:
+
+    Classe principale che incapsula tutta la logica.
+
+    Inizializza e collega tutte le componenti (PeerManager, ServiceRegistry, ecc.).
+
+    Avvia il listener UDP, gestisce i messaggi in arrivo e il lookup.
+
+🔧 Contiene:
+
+    ID, Port = identificatore del nodo.
+
+    PeerMgr = gestore peer conosciuti.
+
+    Registry = registro dei servizi.
+
+    Digests, GossipM, FailureD = componenti operative.
+
+🧪 Metodo Run(lookup)
+
+    Se lookup è attivo: aspetta heartbeat, poi fa lookup del servizio.
+
+    Altrimenti rimane attivo ricevendo gossip e aggiornando lo stato.
+
+2. PeerManager
+
+📄 File: peermanager.go
+
+👥 Responsabilità:
+
+    Tiene traccia dei peer conosciuti (map[string]bool) e dei timestamp di ultimo heartbeat (LastSeen).
+
+    Aggiorna chi è "vivo", aggiunge nuovi peer, rimuove peer "morti".
+
+🔧 Metodi chiave:
+
+    Add(peer) → aggiunge un peer alla mappa.
+
+    Seen(peer) → aggiorna il tempo di ultimo contatto.
+
+    Remove(peer) → rimuove il peer da tutte le mappe.
+
+    List() → restituisce la lista dei peer.
+
+3. ServiceRegistry
+
+📄 File: serviceregistry.go
+
+🛠️ Responsabilità:
+
+    Tiene traccia di quali servizi (es. "payments", "auth") sono offerti da quali nodi.
+
+    Ogni voce è: service → {peer → timestamp}.
+
+🔧 Metodi chiave:
+
+    AddLocal(id, svcCSV) → registra i servizi offerti dal nodo stesso.
+
+    Update(peer, services) → aggiorna chi offre cosa da heartbeat ricevuti.
+
+    RemoveProvider(peer) → rimuove tutti i servizi offerti da un peer morto.
+
+    Lookup(service) → restituisce un provider casuale per un servizio.
+
+4. DigestManager
+
+📄 File: digestmanager.go
+
+🔐 Responsabilità:
+
+    Calcola una firma SHA1 deterministica che rappresenta lo stato dei servizi conosciuti.
+
+    Tiene traccia dell'ultimo digest inviato per ciascun peer (per evitare gossip inutili).
+
+🔧 Metodi chiave:
+
+    Compute(reg) → calcola digest SHA1 sull'intero ServiceRegistry.
+
+    Changed(peer, newDigest) → true se il digest per quel peer è diverso (trigger per heartbeat).
+
+5. GossipManager
+
+📄 File: gossipmanager.go
+
+📣 Responsabilità:
+
+    Ogni 3s manda heartbeat (con digest) ai peer.
+
+    Solo se DigestManager.Changed() dice che qualcosa è cambiato → efficienza smart.
+
+🔧 Metodi chiave:
+
+    Start() → loop periodico di invio heartbeat smart.
+
+    sendUDP(data, peer) → invio di un []byte UDP al peer.
+
+6. FailureDetector
+
+📄 File: failuredetector.go
+
+☠️ Responsabilità:
+
+    Ogni 1s, controlla se un peer è silente da più di timeout (10s).
+
+    Se sì, lo marca come morto → rimosso da PeerManager e ServiceRegistry.
+
+🔧 Metodo chiave:
+
+    Start() → avvia la goroutine periodica.
+
+7. proto (protocollo messaggi)
+
+📄 File: proto.go (in pkg/proto)
+
+📬 Responsabilità:
+
+    Definisce il formato dei messaggi e la serializzazione/deserializzazione.
+
+📦 Contiene:
+
+    Envelope = messaggio con tipo, timestamp, mittente, payload.
+
+    Heartbeat, Rumor = payload.
+
+    Encode(...) / Decode(...) → serializzazione JSON + timestamp automatico.
+
+8. msgfactory.go
+
+📄 File: msgfactory.go
+
+🏭 Responsabilità:
+
+    Costruisce messaggi di heartbeat già pronti per l’invio.
+
+🔧 Funzioni:
+
+    MakeHeartbeatWithDigest(reg, digest) → crea un heartbeat digest da inviare.
+
+🔁 Flusso di esecuzione
+
+    Ogni nodo avvia:
+
+        UDP listener
+
+        Gossip manager
+
+        Failure detector
+
+    Ogni 3 secondi:
+
+        GossipManager calcola digest.
+
+        Se è cambiato, manda heartbeat a peer.
+
+    All'arrivo di un heartbeat:
+
+        Node decodifica messaggio.
+
+        Aggiorna:
+
+            PeerManager.Seen
+
+            ServiceRegistry.Update
+
+    Se un nodo non risponde:
+
+        FailureDetector lo marca morto dopo 10s.
+
+    Client (--lookup=...):
+
+        Riceve gossip per 8s.
+
+        Chiama Registry.Lookup(service).
+
+✍️ Riepilogo concettuale
+Componente	Scopo principale	Periodicità
+Node	Orchestratore principale	continua
+PeerManager	Gestione peer e lastSeen	aggiornata da HB
+ServiceRegistry	Mappa service → peers	aggiornata da HB
+DigestManager	SHA1 deterministico dello stato	ogni gossip
+GossipManager	Invia heartbeat con digest	ogni 3s
+FailureDetector	Rileva nodi morti	ogni 1s
+proto	(De)serializzazione messaggi	costante
+
+
+
+Documentazione: Architettura del Nodo nel Protocollo Gossip
+
+Obiettivo Generale
+
+Il progetto implementa un sistema distribuito in Go, in cui ogni nodo partecipa a un protocollo gossip per condividere informazioni sui servizi offerti e rilevare guasti.
+
+Classi e Ruoli
+
+1. Node
+
+Rappresenta un nodo del sistema. Contiene:
+
+PeerMgr: gestisce i peer conosciuti e i loro heartbeat.
+
+Registry: mappa dei servizi offerti dai peer.
+
+Digests: tiene traccia dell’ultimo digest calcolato per ogni peer.
+
+GossipM: logica di invio dei messaggi gossip.
+
+FailureD: logica di rilevamento dei peer morti.
+
+Il metodo Run avvia gossip, failure detector e il listener UDP. Se è presente un lookup, attende alcuni heartbeat, effettua la lookup e termina.
+
+2. PeerManager
+
+Gestisce lo stato dei peer noti:
+
+Peers: mappa dei peer attivi.
+
+LastSeen: timestamp dell’ultimo heartbeat ricevuto da ciascun peer.
+
+Metodi principali:
+
+Add(): registra un nuovo peer.
+
+Seen(): aggiorna il timestamp.
+
+Remove(): elimina peer scaduti.
+
+List(): restituisce tutti i peer attivi.
+
+3. ServiceRegistry
+
+Tiene traccia di quali servizi sono offerti da quali peer.
+
+Table: mappa servizio → {peer → lastSeen}.
+
+Metodi:
+
+AddLocal(): registra i servizi del nodo locale.
+
+Update(): aggiorna i servizi conosciuti dai peer.
+
+RemoveProvider(): rimuove tutti i servizi di un peer morto.
+
+Lookup(): restituisce un provider a caso per un dato servizio.
+
+4. DigestManager
+
+Serve a evitare di inviare heartbeat inutili:
+
+Compute(): calcola uno SHA1 deterministico dei servizi noti.
+
+Changed(peer, digest): ritorna true se il digest è cambiato rispetto all’ultimo inviato a quel peer.
+
+5. GossipManager
+
+Si occupa dell’invio periodico degli heartbeat:
+
+Ogni 3 secondi, calcola il digest corrente.
+
+Per ogni peer, se il digest è cambiato rispetto all’ultimo inviato, invia un heartbeat.
+
+6. FailureDetector
+
+Controlla ogni secondo se qualche peer non ha più inviato heartbeat da troppo tempo (timeout di default: 10s). Se un peer è scaduto:
+
+Viene rimosso da PeerMgr e da Registry.
+
+Viene loggato come DEAD.
+
+7. msgfactory.go
+
+Contiene metodi di utilità per costruire heartbeat con digest:
+
+MakeHeartbeatWithDigest(reg, digest): costruisce un proto.Heartbeat con digest e lo incapsula in un proto.Envelope.
+
+8. proto.go
+
+Contiene:
+
+MsgType, Envelope, Heartbeat, Rumor: strutture base per serializzare messaggi.
+
+Encode() e Decode(): serializzazione/deserializzazione generiche.
+
+DecodeHeartbeat() e DecodeRumor() per parsing sicuro dei payload.
+
+Conclusione
+
+L’architettura è modulare e ben separata:
+
+Ogni componente ha una singola responsabilità.
+
+I peer comunicano via UDP, inviando heartbeat.
+
+I servizi convergono tramite gossip e il client può eseguire una lookup di un servizio qualsiasi, anche dopo join dinamico.
+
+Siamo ora pronti a estendere il protocollo con rumor mongering e fan-out configurabile!
+
