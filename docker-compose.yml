@@ -1,24 +1,38 @@
+
 services:
   node1:
-    hostname: node1
     build: .
-    command: ["--id=node1:9001", "--port=9001",
-              "--peers=node2:9002,node3:9003",
-              "--services=auth"]
-    ports: ["9001:9001/udp"]
+    hostname: node1
+    command:
+      - "--id=node1:9001"
+      - "--port=9001"
+      - "--peers=node2:9002,node3:9003"
+      - "--services=auth"
+    ports:
+      - "9001:9001/udp"
 
   node2:
+    build: .
     hostname: node2
-    build: .
-    command: ["--id=node2:9002", "--port=9002",
-              "--peers=node1:9001,node3:9003",
-              "--services=payments"]
-    ports: ["9002:9002/udp"]
+    command:
+      - "--id=node2:9002"
+      - "--port=9002"
+      - "--peers=node1:9001,node3:9003"
+      - "--services=orders"
+    ports:
+      - "9002:9002/udp"
 
-  node3:
-    hostname: node3
+  # client reactive lookup
+  lookup:
     build: .
-    command: ["--id=node3:9003", "--port=9003",
-              "--peers=node1:9001,node2:9002",
-              "--services=orders"]
-    ports: ["9003:9003/udp"]
+    depends_on:
+      - node1
+      - node2
+    entrypoint: ["gossip-node"]     # il binario generato
+    command:
+      - "--id=client:9009"
+      - "--port=9009"
+      - "--peers=node1:9001,node2:9002"
+      - "--lookup=orders"
+      - "--ttl=3"
+      - "--fanout=2"

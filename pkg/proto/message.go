@@ -11,20 +11,22 @@ type MsgType int
 const (
 	MsgHeartbeat       MsgType = iota + 1 // 1  – HB “normale”
 	MsgHeartbeatDigest                    // 2  – HB con digest
-	MsgRumor                              // 3  – blind-counter rumor (prossimo step)
+	MsgRumor                              // 3  – blind-counter rumor
+	MsgLookup                             // 4  – richiesta di lookup on-demand
+	MsgLookupResponse                     // 5  – risposta a una richiesta di lookup
 )
 
 type Envelope struct {
-	Type MsgType         `json:"type"` // header
-	From string          `json:"from"` // nodo mittente "host:port"
-	TS   int64           `json:"ts"`   // timestamp (unix-nano)
-	Data json.RawMessage `json:"data"` // payload specifico
+	Type MsgType         `json:"type"`
+	From string          `json:"from"`
+	TS   int64           `json:"ts"`
+	Data json.RawMessage `json:"data"`
 }
 
 // ---------- payload ----------
 type Heartbeat struct {
-	Services []string `json:"services,omitempty"` // servizi offerti dal mittente
-	Digest   string   `json:"digest,omitempty"`   // hash di peers+servizi
+	Services []string `json:"services,omitempty"`
+	Digest   string   `json:"digest,omitempty"`
 }
 
 type Rumor struct {
@@ -32,7 +34,20 @@ type Rumor struct {
 	Payload []byte `json:"payload"`
 }
 
-// ---------- helper ----------
+// --- lookup on-demand payloads ---
+type LookupRequest struct {
+	ID      string `json:"id"`
+	Service string `json:"service"`
+	Origin  string `json:"origin"`
+	TTL     int    `json:"ttl"`
+}
+
+type LookupResponse struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+}
+
+// ---------- generic helpers ----------
 func Encode[T any](mt MsgType, from string, payload T) ([]byte, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -58,4 +73,17 @@ func DecodeRumor(raw json.RawMessage) (Rumor, error) {
 	var r Rumor
 	err := json.Unmarshal(raw, &r)
 	return r, err
+}
+
+// ---------- lookup helpers ----------
+func DecodeLookupRequest(raw json.RawMessage) (LookupRequest, error) {
+	var lr LookupRequest
+	err := json.Unmarshal(raw, &lr)
+	return lr, err
+}
+
+func DecodeLookupResponse(raw json.RawMessage) (LookupResponse, error) {
+	var resp LookupResponse
+	err := json.Unmarshal(raw, &resp)
+	return resp, err
 }

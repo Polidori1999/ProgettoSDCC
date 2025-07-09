@@ -64,16 +64,17 @@ func (n *Node) Run(lookupSvc string) {
 	}
 	defer conn.Close()
 
-	// 3. Goroutine di lettura gossip
+	// 3. Goroutine di lettura gossip e lookup
 	done := make(chan struct{})
 	go func() {
-		buf := make([]byte, 4_096)
+		buf := make([]byte, 4096)
 		for {
 			select {
 			case <-done:
 				return
 			default:
-				nRead, _, err := conn.ReadFromUDP(buf)
+				// Catturiamo anche l'indirizzo sorgente
+				nRead, srcAddr, err := conn.ReadFromUDP(buf)
 				if err != nil {
 					if strings.Contains(err.Error(), "closed network connection") {
 						return
@@ -85,6 +86,7 @@ func (n *Node) Run(lookupSvc string) {
 				if err != nil {
 					continue
 				}
+
 				switch env.Type {
 				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
 					var hb proto.Heartbeat
@@ -92,10 +94,61 @@ func (n *Node) Run(lookupSvc string) {
 						n.PeerMgr.Add(env.From)
 						n.PeerMgr.Seen(env.From)
 						n.Registry.Update(env.From, hb.Services)
-						log.Printf("HB from %-12s services=%v digest=%s", env.From, hb.Services, hb.Digest)
+						log.Printf("HB from %-12s services=%v digest=%s",
+							env.From, hb.Services, hb.Digest)
 					}
+
 				case proto.MsgRumor:
 					// TODO: rumor handling
+
+				case proto.MsgLookup:
+					// decodifica richiesta
+					lr, err := proto.DecodeLookupRequest(env.Data)
+					if err != nil {
+						log.Printf("bad LookupRequest: %v", err)
+						continue
+					}
+					log.Printf("RX Lookup %s TTL=%d from %s",
+						lr.Service, lr.TTL, env.From)
+
+					// se ho il servizio, rispondo direttamente al mittente su srcAddr
+					if provider, ok := n.Registry.Lookup(lr.Service); ok {
+						resp := proto.LookupResponse{
+							ID:       lr.ID,
+							Provider: provider,
+						}
+						out, err := proto.Encode(proto.MsgLookupResponse, n.ID, resp)
+						if err == nil {
+							// invio la risposta proprio all'indirizzo UDP del client
+							conn.WriteToUDP(out, srcAddr)
+							log.Printf("  -> replied to %s", srcAddr)
+						}
+						continue
+					}
+
+					// altrimenti forward se TTL>0
+					if lr.TTL > 0 {
+						lr.TTL--
+						out, err := proto.Encode(proto.MsgLookup, n.ID, lr)
+						if err == nil {
+							for _, p := range n.PeerMgr.List() {
+								if p == env.From {
+									continue
+								}
+								n.GossipM.sendUDP(out, p)
+							}
+							log.Printf("  -> forwarded TTL=%d", lr.TTL)
+						}
+					}
+
+				case proto.MsgLookupResponse:
+					// facoltativo: log se qualcun altro riceve la risposta
+					lrsp, err := proto.DecodeLookupResponse(env.Data)
+					if err == nil {
+						log.Printf("RX LookupResponse %s → %s",
+							lrsp.ID, lrsp.Provider)
+					}
+
 				default:
 					log.Printf("unknown msg type %d", env.Type)
 				}
@@ -103,7 +156,7 @@ func (n *Node) Run(lookupSvc string) {
 		}
 	}()
 
-	// 4. Se c'è lookup: aspetta convergenza, esegui lookup, poi chiudi e termina
+	// 4. Fallback al lookup “storico” se lookupSvc non è vuoto
 	if lookupSvc != "" {
 		log.Printf("Waiting for heartbeats before lookup…")
 		time.Sleep(8 * time.Second)
@@ -114,7 +167,6 @@ func (n *Node) Run(lookupSvc string) {
 			fmt.Printf("Service %s NOT found\n", lookupSvc)
 		}
 
-		// pulizia
 		close(done)
 		conn.Close()
 		return

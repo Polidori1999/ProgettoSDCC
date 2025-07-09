@@ -1,9 +1,60 @@
-🚀 Prossime funzionalità suggerite
+✅ Completato finora
 
-Ora che la base è solida, puoi passare a:
+Implementazione messaggi MsgLookup e MsgLookupResponse (proto)
 
-    Blind-counter rumor mongering (per diffondere update/rumor).
+Reactive client lookup con TTL e fanout
 
-    Fan-out k configurabile (per controllare il traffico).
+Forwarding rumor con decremento TTL
 
-    Persistenza (salvare peer visti, servizi offerti).
+Risposta diretta su conn.WriteToUDP al sender
+
+Failure detector con rimozione servizi
+
+    Test: Failover provider node2
+
+🧩 TODO – Feature/Code
+🔄 1. Rumor deduplication (minimo necessario se TTL > 1)
+
+Memorizzare gli ID dei rumor già visti (seenLookup map[string]bool)
+
+    Evitare di inoltrare più volte la stessa richiesta
+
+🔢 2. TTL troppo basso
+
+Se TTL = 0 → il nodo non inoltra nulla
+
+    Se TTL = 1 → un solo hop
+
+🛤️ 3. Multi-hop relay (A → B → C)
+
+Introdurre node3 nella mesh
+
+Configurare una topologia A ↔ B ↔ C, dove solo C ha il servizio
+
+    Fare in modo che A scopra “orders” passando per B (con TTL ≥ 2)
+
+➕ 4. Join dinamico (provider che si aggiunge dopo)
+
+Avvia node1 e node2 senza “orders”
+
+Avvia node3 con --services=orders dopo qualche secondo
+
+    Confermare che il servizio diventa disponibile per lookup
+
+🌐 5. Partition e recovery
+
+Simulare disconnessione temporanea di node2
+
+Verificare che venga marcato DEAD e i suoi servizi scompaiano
+
+    Riconnessione → ritorno heartbeat e servizi nel registry
+
+🔍 TODO – Test (da eseguire uno alla volta)
+Test	Obiettivo	Fatto
+✅ Failover provider	Verifica risposta NOT found se provider giù	✅
+TTL = 0 / TTL = 1	Controlla che la richiesta non arrivi troppo lontano	☐
+Multi-hop forwarding	A → B → C, TTL=2	☐
+Join dinamico di provider	node3 si unisce offrendo il servizio	☐
+Partition e riconnessione	node2 si isola, poi torna	☐
+
+Fammi sapere da quale vuoi partire ora: TTL, forwarding a 3 nodi o join dinamico?
