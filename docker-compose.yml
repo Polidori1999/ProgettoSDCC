@@ -22,17 +22,28 @@ services:
     ports:
       - "9002:9002/udp"
 
-  # client reactive lookup
+  node3:
+    build: .
+    hostname: node3
+    command:
+      - "--id=node3:9003"
+      - "--port=9003"
+      - "--peers=node1:9001,node2:9002"
+      - "--services=payments"
+    ports:
+      - "9003:9003/udp"
+
   lookup:
     build: .
     depends_on:
       - node1
       - node2
-    entrypoint: ["gossip-node"]     # il binario generato
+      - node3
+    entrypoint: ["gossip-node"]
     command:
       - "--id=client:9009"
       - "--port=9009"
-      - "--peers=node1:9001,node2:9002"
+      - "--peers=node1:9001,node2:9002,node3:9003"
       - "--lookup=orders"
       - "--ttl=3"
       - "--fanout=2"

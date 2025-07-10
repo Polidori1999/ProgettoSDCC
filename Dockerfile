@@ -1,3 +1,5 @@
+# Dockerfile
+
 # ── Stage 1: build ───────────────────────────────────────────────────────
 FROM golang:1.24-alpine AS builder
 
@@ -16,8 +18,8 @@ COPY --from=builder /app/gossip-node /usr/local/bin/gossip-node
 
 WORKDIR /usr/local/bin
 
-# espone una porta di default (poi in compose passi quella giusta)
-EXPOSE 9001
+# espone le porte UDP dei tre nodi
+EXPOSE 9001/udp 9002/udp 9003/udp
 
-# qui definiamo l’eseguibile di default
+# eseguibile di default
 ENTRYPOINT ["gossip-node"]

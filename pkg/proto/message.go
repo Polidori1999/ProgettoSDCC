@@ -14,6 +14,8 @@ const (
 	MsgRumor                              // 3  – blind-counter rumor
 	MsgLookup                             // 4  – richiesta di lookup on-demand
 	MsgLookupResponse                     // 5  – risposta a una richiesta di lookup
+	MsgSuspect                            // 6  – rumor “peer sospetto”
+	MsgDead                               // 7  – rumor “peer morto”
 )
 
 type Envelope struct {
@@ -45,6 +47,17 @@ type LookupRequest struct {
 type LookupResponse struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
+}
+
+// --- suspect/dead rumors payloads ---
+type SuspectRumor struct {
+	RumorID string `json:"rumorID"` // un ID univoco per dedup
+	Peer    string `json:"peer"`    // il peer sospetto
+}
+
+type DeadRumor struct {
+	RumorID string `json:"rumorID"` // un ID univoco per dedup
+	Peer    string `json:"peer"`    // il peer confermato morto
 }
 
 // ---------- generic helpers ----------
@@ -86,4 +99,17 @@ func DecodeLookupResponse(raw json.RawMessage) (LookupResponse, error) {
 	var resp LookupResponse
 	err := json.Unmarshal(raw, &resp)
 	return resp, err
+}
+
+// ---------- suspect/dead decoders ----------
+func DecodeSuspectRumor(raw json.RawMessage) (SuspectRumor, error) {
+	var r SuspectRumor
+	err := json.Unmarshal(raw, &r)
+	return r, err
+}
+
+func DecodeDeadRumor(raw json.RawMessage) (DeadRumor, error) {
+	var d DeadRumor
+	err := json.Unmarshal(raw, &d)
+	return d, err
 }
