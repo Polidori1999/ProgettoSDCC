@@ -1,5 +1,28 @@
 docker compose down
 docker compose up --build
+docker compose logs -f node1
+
+per rimuovere processi in uso:
+docker ps -a --filter network=progettosdcc_default
+docker rm $(docker ps -a --filter network=progettosdcc_default -q)
+docker network rm progettosdcc_default
+
+
+per aggiungere nuovo nodo
+docker run -d --rm \
+  --network progettosdcc_default \
+  --name node6 \
+  --hostname node6 \
+  progettosdcc-node1:latest \
+  /usr/local/bin/gossip-node \
+    --id=node6:9006 \
+    --port=9006 \
+    --peers=node1:9001,node2:9002,node3:9003,node4:9004,node5:9005
+
+
+per toglierlo
+docker rm -f node6
+
 
 
 
@@ -8,7 +31,7 @@ docker compose up --build
 
 
 
- 
+
  peers.go: gestione thread-safe dei peer
 
  registry.go: tabella servizi + lookup

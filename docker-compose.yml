@@ -6,7 +6,7 @@ services:
     command:
       - "--id=node1:9001"
       - "--port=9001"
-      - "--peers=node2:9002,node3:9003"
+      - "--peers=node2:9002,node3:9003,node4:9004,node5:9005"
       - "--services=auth"
     ports:
       - "9001:9001/udp"
@@ -17,7 +17,7 @@ services:
     command:
       - "--id=node2:9002"
       - "--port=9002"
-      - "--peers=node1:9001,node3:9003"
+      - "--peers=node2:9002,node3:9003,node4:9004,node5:9005"
       - "--services=orders"
     ports:
       - "9002:9002/udp"
@@ -28,10 +28,22 @@ services:
     command:
       - "--id=node3:9003"
       - "--port=9003"
-      - "--peers=node1:9001,node2:9002"
+      - "--peers=node1:9001,node2:9002,node4:9004,node5:9005"
       - "--services=payments"
     ports:
       - "9003:9003/udp"
+
+  node4:
+      build: .
+      hostname: node4
+      command: [ "--id=node4:9004", "--port=9004", "--peers=node1:9001,node2:9002,node3:9003,node5:9005", "--services=svc" ]
+      ports: [ "9004:9004/udp" ]
+
+  node5:
+      build: .
+      hostname: node5
+      command: [ "--id=node5:9005", "--port=9005", "--peers=node1:9001,node2:9002,node3:9003,node4:9004", "--services=svc" ]
+      ports: [ "9005:9005/udp" ]
 
   lookup:
     build: .

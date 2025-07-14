@@ -29,6 +29,7 @@ type Envelope struct {
 type Heartbeat struct {
 	Services []string `json:"services,omitempty"`
 	Digest   string   `json:"digest,omitempty"`
+	Peers    []string `json:"peers,omitempty"`
 }
 
 type Rumor struct {
