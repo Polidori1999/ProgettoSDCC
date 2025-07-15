@@ -26,6 +26,7 @@ type Node struct {
 	seenSuspect     map[string]bool // rumorID sospetti già visti
 	seenDead        map[string]bool // rumorID dead già visti
 	quorumThreshold int             // soglia di quorum per confermare dead
+	initialSeeds    []string        // i seed passati in --peers
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -48,7 +49,8 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		log.Fatalf("bad port: %v", err)
 	}
 
-	pm := NewPeerManager(strings.Split(peerCSV, ","), id)
+	seeds := strings.Split(peerCSV, ",")
+	pm := NewPeerManager(seeds, id)
 	reg := NewServiceRegistry()
 	reg.AddLocal(id, svcCSV)
 
@@ -73,6 +75,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		seenSuspect:     make(map[string]bool),
 		seenDead:        make(map[string]bool),
 		quorumThreshold: quorum,
+		initialSeeds:    seeds,
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
@@ -111,6 +114,15 @@ func (n *Node) alivePeers() []string {
 		}
 	}
 	return out
+}
+
+func (pm *PeerManager) AddIfNew(peer string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if !pm.Peers[peer] {
+		pm.Peers[peer] = true
+		pm.LastSeen[peer] = time.Now()
+	}
 }
 
 func (n *Node) Run(lookupSvc string) {
@@ -166,6 +178,12 @@ func (n *Node) Run(lookupSvc string) {
 					if json.Unmarshal(env.Data, &hb) == nil {
 						peer := env.From
 
+						for _, p2 := range hb.Peers {
+							if p2 != n.ID {
+								n.PeerMgr.AddIfNew(p2)
+							}
+						}
+
 						// se era già “morto”, pulisco solo il suo stato rumor
 						if n.suspectCount[peer] > 0 || hasDeadRumorsFor(peer, n.seenDead) {
 							// cancello tutti i suspectID di quel peer
@@ -182,13 +200,20 @@ func (n *Node) Run(lookupSvc string) {
 							}
 							n.suspectCount[peer] = 0
 							log.Printf("Peer %s RI-ENTRATO: resetto failure-detector", peer)
+
 						}
 
 						n.PeerMgr.Add(peer)
 						n.updateQuorum()
 						n.PeerMgr.Seen(peer)
 						n.Registry.Update(peer, hb.Services)
-						log.Printf("HB from %-12s services=%v digest=%s", peer, hb.Services, hb.Digest)
+						log.Printf(
+							"HB from %-12s services=%v digest=%s peers=%v",
+							peer,
+							hb.Services,
+							hb.Digest,
+							hb.Peers, // <<< ora vediamo il tuo piggy-back
+						)
 					}
 
 				case proto.MsgRumor:

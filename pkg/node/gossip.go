@@ -28,7 +28,8 @@ func (gm *GossipManager) Start() {
 			d := gm.digest.Compute(gm.reg)
 			for _, peer := range gm.peers.List() {
 				if gm.digest.Changed(peer, d) {
-					msg := MakeHeartbeatWithDigest(gm.reg, gm.self, d)
+					msg := MakeHeartbeatWithDigest(gm.reg, gm.self, d, gm.peers.List())
+
 					gm.sendUDP(msg, peer)
 				}
 			}

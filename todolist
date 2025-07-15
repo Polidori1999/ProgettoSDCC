@@ -58,3 +58,38 @@ Join dinamico di provider	node3 si unisce offrendo il servizio	☐
 Partition e riconnessione	node2 si isola, poi torna	☐
 
 Fammi sapere da quale vuoi partire ora: TTL, forwarding a 3 nodi o join dinamico?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+15/07
+vedere se effettivamente è giusto k fault tollerance
+vedere timer dinamico
+differenziare leave volontario da crash, magari tramite id
+fixare qualche log
+service discovery   facendo rumor spreading

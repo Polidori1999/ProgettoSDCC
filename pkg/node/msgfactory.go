@@ -7,7 +7,7 @@ import (
 )
 
 // MakeHeartbeatWithDigest costruisce un heartbeat con digest usando la nuova API di proto.Encode.
-func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string) []byte {
+func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string, peers []string) []byte {
 
 	// raccogli servizi locali
 	svcs := make([]string, 0, len(reg.Table))
@@ -18,6 +18,7 @@ func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string)
 	hb := proto.Heartbeat{
 		Services: svcs,
 		Digest:   digest,
+		Peers:    peers, // << aggiungo la lista di peer
 	}
 
 	// ora basta chiamare Encode direttamente
@@ -29,7 +30,7 @@ func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string)
 }
 
 // MakeHeartbeat costruisce un heartbeat “normale” (senza digest esplicito).
-func MakeHeartbeat(reg *ServiceRegistry, fromID string) []byte {
+func MakeHeartbeat(reg *ServiceRegistry, fromID string, peers []string) []byte {
 	svcs := make([]string, 0, len(reg.Table))
 	for s := range reg.Table {
 		svcs = append(svcs, s)
@@ -37,8 +38,8 @@ func MakeHeartbeat(reg *ServiceRegistry, fromID string) []byte {
 
 	hb := proto.Heartbeat{
 		Services: svcs,
-		// Digest verrà calcolato internamente da proto.Encode se necessario,
-		// oppure puoi passarlo a mano qui come stringa vuota.
+		Peers:    peers, // << lista peer piggy-back
+		// Digest verrà calcolato internamente…
 	}
 
 	out, err := proto.Encode(proto.MsgHeartbeat, fromID, hb)
