@@ -7,19 +7,21 @@ docker ps -a --filter network=progettosdcc_default
 docker rm $(docker ps -a --filter network=progettosdcc_default -q)
 docker network rm progettosdcc_default
 
+docker compose build
+ docker compose up -d registry node1 node2 node3 node4 node5
 
 per aggiungere nuovo nodo
-docker run -d --rm \
+
+
+docker run -d \
+  --name=node6 \
   --network progettosdcc_default \
-  --name node6 \
-  --hostname node6 \
-  progettosdcc-node1:latest \
-  /usr/local/bin/gossip-node \
+  -p 9006:9006/udp \
+  progettosdcc-node \
     --id=node6:9006 \
     --port=9006 \
-    --peers=node1:9001,node2:9002,node3:9003,node4:9004,node5:9005
-
-
+    --registry=registry:9000 \
+    --services=analytics
 per toglierlo
 docker rm -f node6
 

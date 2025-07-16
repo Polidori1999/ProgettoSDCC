@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"ProgettoSDCC/pkg/proto"
@@ -27,6 +30,7 @@ type Node struct {
 	seenDead        map[string]bool // rumorID dead già visti
 	quorumThreshold int             // soglia di quorum per confermare dead
 	initialSeeds    []string        // i seed passati in --peers
+	seenLeave       map[string]bool // peer → già processato Leave
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -76,6 +80,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		seenDead:        make(map[string]bool),
 		quorumThreshold: quorum,
 		initialSeeds:    seeds,
+		seenLeave:       make(map[string]bool),
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
@@ -126,6 +131,20 @@ func (pm *PeerManager) AddIfNew(peer string) {
 }
 
 func (n *Node) Run(lookupSvc string) {
+	// 1. intercetta SIGTERM/SIGINT
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Printf("→ received SIGTERM/SIGINT, sending Leave…")
+		lv := proto.Leave{Peer: n.ID}
+		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+		for _, p := range n.PeerMgr.List() {
+			// qui sendUDP è visibile perché siamo nel package node
+			n.GossipM.SendUDP(pkt, p)
+		}
+		os.Exit(0)
+	}()
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
 	n.FailureD.Start()
@@ -174,6 +193,7 @@ func (n *Node) Run(lookupSvc string) {
 				switch env.Type {
 
 				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
+
 					var hb proto.Heartbeat
 					if json.Unmarshal(env.Data, &hb) == nil {
 						peer := env.From
@@ -184,6 +204,11 @@ func (n *Node) Run(lookupSvc string) {
 							}
 						}
 
+						if n.seenLeave[peer] {
+							// era uscito volontariamente, ora sta tornando
+							delete(n.seenLeave, peer)
+							log.Printf("Peer %s RI-ENTRATO (dopo leave)", peer)
+						}
 						// se era già “morto”, pulisco solo il suo stato rumor
 						if n.suspectCount[peer] > 0 || hasDeadRumorsFor(peer, n.seenDead) {
 							// cancello tutti i suspectID di quel peer
@@ -247,7 +272,7 @@ func (n *Node) Run(lookupSvc string) {
 								if p == env.From {
 									continue
 								}
-								n.GossipM.sendUDP(out, p)
+								n.GossipM.SendUDP(out, p)
 							}
 							log.Printf("  -> forwarded TTL=%d", lr.TTL)
 						}
@@ -273,7 +298,7 @@ func (n *Node) Run(lookupSvc string) {
 					// 3) rilancio sempre il SuspectRumor a tutti i peer
 					outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
 					for _, p := range n.PeerMgr.List() {
-						n.GossipM.sendUDP(outS, p)
+						n.GossipM.SendUDP(outS, p)
 					}
 
 					// 4) appena raggiungi il quorum (2), logga e genera il DeadRumor
@@ -286,7 +311,7 @@ func (n *Node) Run(lookupSvc string) {
 						}
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
 						for _, p := range n.PeerMgr.List() {
-							n.GossipM.sendUDP(outD, p)
+							n.GossipM.SendUDP(outD, p)
 						}
 						// rimuovo il provider una sola volta
 						n.Registry.RemoveProvider(r.Peer)
@@ -303,11 +328,39 @@ func (n *Node) Run(lookupSvc string) {
 					// rilancio dead rumor
 					outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
 					for _, p := range n.PeerMgr.List() {
-						n.GossipM.sendUDP(outD, p)
+						n.GossipM.SendUDP(outD, p)
 					}
 					n.Registry.RemoveProvider(d.Peer)
 					n.updateQuorum()
 
+				case proto.MsgLeave:
+					lv, err := proto.DecodeLeave(env.Data)
+					if err != nil {
+						log.Printf("bad Leave payload: %v", err)
+						break
+					}
+					peer := lv.Peer
+
+					// se l'abbiamo già visto, ignora
+					if n.seenLeave[peer] {
+						break
+					}
+					n.seenLeave[peer] = true
+
+					log.Printf("Peer %s → LEFT voluntarily", peer)
+
+					// propaga una sola volta
+					raw, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+					for _, p := range n.PeerMgr.List() {
+						if p != env.From {
+							n.GossipM.SendUDP(raw, p)
+						}
+					}
+
+					// pulizia definitiva
+					n.PeerMgr.Remove(peer)
+					n.Registry.RemoveProvider(peer)
+					n.updateQuorum()
 				default:
 					log.Printf("unknown msg type %d", env.Type)
 				}

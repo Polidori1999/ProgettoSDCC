@@ -108,9 +108,9 @@ func main() {
 		doReactiveLookup(*lookupFlag, *idFlag, peerList, *portFlag, *ttlFlag, *fanoutFlag)
 		return
 	}
+	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag) //node
 
-	node := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
-	node.Run("")
+	n.Run("")
 }
 
 // randomSubset estrae fino a n peer a caso da peers

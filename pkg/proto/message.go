@@ -16,6 +16,7 @@ const (
 	MsgLookupResponse                     // 5  – risposta a una richiesta di lookup
 	MsgSuspect                            // 6  – rumor “peer sospetto”
 	MsgDead                               // 7  – rumor “peer morto”
+	MsgLeave                              // 8 – nodo che si ritira volontariamente
 )
 
 type Envelope struct {
@@ -31,7 +32,9 @@ type Heartbeat struct {
 	Digest   string   `json:"digest,omitempty"`
 	Peers    []string `json:"peers,omitempty"`
 }
-
+type Leave struct {
+	Peer string `json:"peer"`
+}
 type Rumor struct {
 	RumorID string `json:"id"`
 	Payload []byte `json:"payload"`
@@ -113,4 +116,11 @@ func DecodeDeadRumor(raw json.RawMessage) (DeadRumor, error) {
 	var d DeadRumor
 	err := json.Unmarshal(raw, &d)
 	return d, err
+}
+
+// decoder per Leave
+func DecodeLeave(raw json.RawMessage) (Leave, error) {
+	var lv Leave
+	err := json.Unmarshal(raw, &lv)
+	return lv, err
 }

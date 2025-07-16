@@ -59,7 +59,7 @@ func (fd *FailureDetector) Start() {
 						if err == nil {
 							targets := append(fd.peers.List(), fd.gossip.self) // ❷ invia anche a sé
 							for _, p := range targets {
-								fd.gossip.sendUDP(out, p)
+								fd.gossip.SendUDP(out, p)
 							}
 						}
 					}

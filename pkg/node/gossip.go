@@ -30,14 +30,14 @@ func (gm *GossipManager) Start() {
 				if gm.digest.Changed(peer, d) {
 					msg := MakeHeartbeatWithDigest(gm.reg, gm.self, d, gm.peers.List())
 
-					gm.sendUDP(msg, peer)
+					gm.SendUDP(msg, peer)
 				}
 			}
 		}
 	}()
 }
 
-func (gm *GossipManager) sendUDP(data []byte, peerAddr string) {
+func (gm *GossipManager) SendUDP(data []byte, peerAddr string) {
 	addr, err := net.ResolveUDPAddr("udp", peerAddr)
 	if err != nil {
 		return
