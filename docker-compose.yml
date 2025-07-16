@@ -1,70 +1,82 @@
+
 services:
+  registry:
+    build:
+      context: ./registry
+      dockerfile: Dockerfile
+    container_name: registry
+    ports:
+      - "9000:9000"
+
   node1:
     build: .
-    hostname: node1
+    container_name: node1
+    depends_on: [registry]
     command:
       - "--id=node1:9001"
       - "--port=9001"
-      - "--peers=node1:9001,node2:9002,node3:9003"  # solo seed
+      - "--registry=registry:9000"
       - "--services=auth"
     ports:
       - "9001:9001/udp"
 
   node2:
     build: .
-    hostname: node2
+    container_name: node2
+    depends_on: [registry]
     command:
       - "--id=node2:9002"
       - "--port=9002"
-      - "--peers=node1:9001,node2:9002,node3:9003"  # solo seed
+      - "--registry=registry:9000"
       - "--services=orders"
     ports:
       - "9002:9002/udp"
 
   node3:
     build: .
-    hostname: node3
+    container_name: node3
+    depends_on: [registry]
     command:
       - "--id=node3:9003"
       - "--port=9003"
-      - "--peers=node1:9001,node2:9002,node3:9003"  # solo seed
+      - "--registry=registry:9000"
       - "--services=payments"
     ports:
       - "9003:9003/udp"
 
   node4:
     build: .
-    hostname: node4
+    container_name: node4
+    depends_on: [registry]
     command:
       - "--id=node4:9004"
       - "--port=9004"
-      - "--peers=node1:9001,node2:9002,node3:9003"  # stesso trio di seed
+      - "--registry=registry:9000"
       - "--services=svc"
     ports:
       - "9004:9004/udp"
 
   node5:
     build: .
-    hostname: node5
+    container_name: node5
+    depends_on: [registry]
     command:
       - "--id=node5:9005"
       - "--port=9005"
-      - "--peers=node1:9001,node2:9002,node3:9003"  # stesso trio di seed
+      - "--registry=registry:9000"
       - "--services=svc"
     ports:
       - "9005:9005/udp"
 
   lookup:
     build: .
-    depends_on:
-      - node1
-      - node2
-      - node3
+    container_name: lookup
+    depends_on: [registry, node1, node2, node3]
     entrypoint: ["gossip-node"]
     command:
       - "--id=client:9009"
       - "--port=9009"
-      - "--peers=node1:9001,node2:9002,node3:9003"
+      - "--registry=registry:9000"
       - "--lookup=orders"
       - "--ttl=3"
       - "--fanout=2"

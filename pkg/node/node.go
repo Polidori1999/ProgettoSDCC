@@ -60,7 +60,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	// quorumThreshold iniziale verrà calcolato da updateQuorum()
 	quorum := 0
 	// FailureDetector ora accetta gossip manager e due timeout
-	fd := NewFailureDetector(pm, reg, gm, 7*time.Second, 10*time.Second)
+	fd := NewFailureDetector(pm, reg, gm, 15*time.Second, 20*time.Second)
 
 	n := &Node{
 		PeerMgr:  pm,
