@@ -1,6 +1,8 @@
 docker compose down
 docker compose up --build
 docker compose logs -f node1
+docker kill --signal SIGKILL node2
+
 
 per rimuovere processi in uso:
 docker ps -a --filter network=progettosdcc_default
@@ -15,6 +17,7 @@ per aggiungere nuovo nodo
 
 docker run -d \
   --name=node6 \
+  --stop-signal=SIGTERM \
   --network progettosdcc_default \
   -p 9006:9006/udp \
   progettosdcc-node \
@@ -22,6 +25,7 @@ docker run -d \
     --port=9006 \
     --registry=registry:9000 \
     --services=analytics
+
 per toglierlo
 docker rm -f node6
 
@@ -47,3 +51,23 @@ docker rm -f node6
  failure.go: rimozione peer morti
 
  node.go: orchestri tutto e fornisci l’entrypoint
+
+
+
+ killare in maniera forzata
+ # prendi TUTTI gli id dei container incriminati (nome che inizia per node o registry)
+ IDS=$(docker ps -a --filter "name=node" --filter "name=registry" -q)
+
+ # per ciascun id estrai il PID host
+ for id in $IDS; do
+   echo "Container $id:"
+   docker inspect -f ' PID = {{.State.Pid}}' "$id"
+ done
+
+for id in $IDS; do
+  PID=$(docker inspect -f '{{.State.Pid}}' "$id")
+  if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+    echo "→ kill -9 $PID"
+    sudo kill -9 "$PID"
+  fi
+done

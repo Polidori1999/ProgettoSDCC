@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"ProgettoSDCC/pkg/proto"
@@ -26,6 +29,12 @@ type Node struct {
 	seenSuspect     map[string]bool // rumorID sospetti già visti
 	seenDead        map[string]bool // rumorID dead già visti
 	quorumThreshold int             // soglia di quorum per confermare dead
+	initialSeeds    []string        // i seed passati in --peers
+	seenLeave       map[string]bool // peer → già processato Leave
+
+	udpConn      *net.UDPConn
+	done         chan struct{}
+	gossipTicker *time.Ticker
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -48,7 +57,8 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		log.Fatalf("bad port: %v", err)
 	}
 
-	pm := NewPeerManager(strings.Split(peerCSV, ","), id)
+	seeds := strings.Split(peerCSV, ",")
+	pm := NewPeerManager(seeds, id)
 	reg := NewServiceRegistry()
 	reg.AddLocal(id, svcCSV)
 
@@ -58,7 +68,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	// quorumThreshold iniziale verrà calcolato da updateQuorum()
 	quorum := 0
 	// FailureDetector ora accetta gossip manager e due timeout
-	fd := NewFailureDetector(pm, reg, gm, 7*time.Second, 10*time.Second)
+	fd := NewFailureDetector(pm, reg, gm, 15*time.Second, 20*time.Second)
 
 	n := &Node{
 		PeerMgr:  pm,
@@ -73,6 +83,8 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		seenSuspect:     make(map[string]bool),
 		seenDead:        make(map[string]bool),
 		quorumThreshold: quorum,
+		initialSeeds:    seeds,
+		seenLeave:       make(map[string]bool),
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
@@ -81,6 +93,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 
 // conta i peer "alive" basandosi su LastSeen entro failTimeout
 func (n *Node) alivePeerCount() int {
+
 	n.PeerMgr.mu.Lock()
 	defer n.PeerMgr.mu.Unlock()
 	now := time.Now()
@@ -113,7 +126,57 @@ func (n *Node) alivePeers() []string {
 	return out
 }
 
+func (pm *PeerManager) AddIfNew(peer string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if !pm.Peers[peer] {
+		pm.Peers[peer] = true
+		pm.LastSeen[peer] = time.Now()
+	}
+}
+
+func (n *Node) Shutdown() {
+	log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
+
+	// 1) invia MsgLeave
+	lv := proto.Leave{Peer: n.ID}
+	pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+	for _, p := range n.PeerMgr.List() {
+		n.GossipM.SendUDP(pkt, p)
+	}
+
+	// 2) dai tempo al pacchetto UDP di partire
+	time.Sleep(500 * time.Millisecond)
+
+	// 3) ferma ticker e goroutine
+	n.gossipTicker.Stop()
+	close(n.done)
+
+	// 4) chiudi socket UDP
+	n.udpConn.Close()
+
+	// 5) (opzionale) aspetta un po’ per essere sicuro…
+	time.Sleep(100 * time.Millisecond)
+}
+
 func (n *Node) Run(lookupSvc string) {
+
+	// 1. intercetta SIGTERM/SIGINT
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Printf("→ received SIGTERM/SIGINT, sending Leave…")
+		lv := proto.Leave{Peer: n.ID}
+		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+		for _, p := range n.PeerMgr.List() {
+			// qui sendUDP è visibile perché siamo nel package node
+			n.GossipM.SendUDP(pkt, p)
+		}
+		time.Sleep(500 * time.Millisecond)
+
+		os.Exit(0)
+	}()
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
 	n.FailureD.Start()
@@ -162,10 +225,22 @@ func (n *Node) Run(lookupSvc string) {
 				switch env.Type {
 
 				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
+
 					var hb proto.Heartbeat
 					if json.Unmarshal(env.Data, &hb) == nil {
 						peer := env.From
 
+						for _, p2 := range hb.Peers {
+							if p2 != n.ID {
+								n.PeerMgr.AddIfNew(p2)
+							}
+						}
+
+						if n.seenLeave[peer] {
+							// era uscito volontariamente, ora sta tornando
+							delete(n.seenLeave, peer)
+							log.Printf("Peer %s RI-ENTRATO (dopo leave)", peer)
+						}
 						// se era già “morto”, pulisco solo il suo stato rumor
 						if n.suspectCount[peer] > 0 || hasDeadRumorsFor(peer, n.seenDead) {
 							// cancello tutti i suspectID di quel peer
@@ -182,13 +257,20 @@ func (n *Node) Run(lookupSvc string) {
 							}
 							n.suspectCount[peer] = 0
 							log.Printf("Peer %s RI-ENTRATO: resetto failure-detector", peer)
+
 						}
 
 						n.PeerMgr.Add(peer)
 						n.updateQuorum()
 						n.PeerMgr.Seen(peer)
 						n.Registry.Update(peer, hb.Services)
-						log.Printf("HB from %-12s services=%v digest=%s", peer, hb.Services, hb.Digest)
+						log.Printf(
+							"HB from %-12s services=%v digest=%s peers=%v",
+							peer,
+							hb.Services,
+							hb.Digest,
+							hb.Peers, // <<< ora vediamo il tuo piggy-back
+						)
 					}
 
 				case proto.MsgRumor:
@@ -222,7 +304,7 @@ func (n *Node) Run(lookupSvc string) {
 								if p == env.From {
 									continue
 								}
-								n.GossipM.sendUDP(out, p)
+								n.GossipM.SendUDP(out, p)
 							}
 							log.Printf("  -> forwarded TTL=%d", lr.TTL)
 						}
@@ -248,7 +330,7 @@ func (n *Node) Run(lookupSvc string) {
 					// 3) rilancio sempre il SuspectRumor a tutti i peer
 					outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
 					for _, p := range n.PeerMgr.List() {
-						n.GossipM.sendUDP(outS, p)
+						n.GossipM.SendUDP(outS, p)
 					}
 
 					// 4) appena raggiungi il quorum (2), logga e genera il DeadRumor
@@ -261,7 +343,7 @@ func (n *Node) Run(lookupSvc string) {
 						}
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
 						for _, p := range n.PeerMgr.List() {
-							n.GossipM.sendUDP(outD, p)
+							n.GossipM.SendUDP(outD, p)
 						}
 						// rimuovo il provider una sola volta
 						n.Registry.RemoveProvider(r.Peer)
@@ -278,11 +360,40 @@ func (n *Node) Run(lookupSvc string) {
 					// rilancio dead rumor
 					outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
 					for _, p := range n.PeerMgr.List() {
-						n.GossipM.sendUDP(outD, p)
+						n.GossipM.SendUDP(outD, p)
 					}
+					// già dopo il tuo log “Peer X DEAD…”
+					n.PeerMgr.Remove(d.Peer)
 					n.Registry.RemoveProvider(d.Peer)
 					n.updateQuorum()
+				case proto.MsgLeave:
+					lv, err := proto.DecodeLeave(env.Data)
+					if err != nil {
+						log.Printf("bad Leave payload: %v", err)
+						break
+					}
+					peer := lv.Peer
 
+					// se l'abbiamo già visto, ignora
+					if n.seenLeave[peer] {
+						break
+					}
+					n.seenLeave[peer] = true
+
+					log.Printf("Peer %s → LEFT voluntarily", peer)
+
+					// propaga una sola volta
+					raw, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+					for _, p := range n.PeerMgr.List() {
+						if p != env.From {
+							n.GossipM.SendUDP(raw, p)
+						}
+					}
+
+					// pulizia definitiva
+					n.PeerMgr.Remove(peer)
+					n.Registry.RemoveProvider(peer)
+					n.updateQuorum()
 				default:
 					log.Printf("unknown msg type %d", env.Type)
 				}

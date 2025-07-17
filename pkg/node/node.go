@@ -31,6 +31,10 @@ type Node struct {
 	quorumThreshold int             // soglia di quorum per confermare dead
 	initialSeeds    []string        // i seed passati in --peers
 	seenLeave       map[string]bool // peer → già processato Leave
+
+	udpConn      *net.UDPConn
+	done         chan struct{}
+	gossipTicker *time.Ticker
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -81,6 +85,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		quorumThreshold: quorum,
 		initialSeeds:    seeds,
 		seenLeave:       make(map[string]bool),
+		done:            make(chan struct{}), // globale cosi non lo
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
@@ -89,6 +94,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 
 // conta i peer "alive" basandosi su LastSeen entro failTimeout
 func (n *Node) alivePeerCount() int {
+
 	n.PeerMgr.mu.Lock()
 	defer n.PeerMgr.mu.Unlock()
 	now := time.Now()
@@ -130,20 +136,48 @@ func (pm *PeerManager) AddIfNew(peer string) {
 	}
 }
 
+func (n *Node) Shutdown() {
+	select {
+	case <-n.done:
+		return // già in corso / già eseguita
+	default:
+	}
+	log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
+
+	// 1) invia MsgLeave
+	lv := proto.Leave{Peer: n.ID}
+	pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+	for _, p := range n.PeerMgr.List() {
+		n.GossipM.SendUDP(pkt, p)
+	}
+
+	// 2) dai tempo al pacchetto UDP di partire
+	time.Sleep(500 * time.Millisecond)
+
+	// 3) ferma ticker/goroutine
+	if n.gossipTicker != nil {
+		n.gossipTicker.Stop()
+	}
+	close(n.done)
+	// 4) chiudi socket UDP
+	if n.udpConn != nil {
+		n.udpConn.Close()
+	}
+
+	// 5) (opzionale) aspetta un po’ per essere sicuro…
+	time.Sleep(100 * time.Millisecond)
+	log.Printf("← Shutdown completa, exit(0)")
+	os.Exit(0)
+}
+
 func (n *Node) Run(lookupSvc string) {
+
 	// 1. intercetta SIGTERM/SIGINT
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Printf("→ received SIGTERM/SIGINT, sending Leave…")
-		lv := proto.Leave{Peer: n.ID}
-		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
-		for _, p := range n.PeerMgr.List() {
-			// qui sendUDP è visibile perché siamo nel package node
-			n.GossipM.SendUDP(pkt, p)
-		}
-		os.Exit(0)
+		n.Shutdown()
 	}()
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
@@ -166,15 +200,16 @@ func (n *Node) Run(lookupSvc string) {
 	if err != nil {
 		log.Fatalf("ListenUDP: %v", err)
 	}
+	n.udpConn = conn
 	defer conn.Close()
 
 	// 3. Goroutine di lettura gossip e lookup
-	done := make(chan struct{})
+
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			select {
-			case <-done:
+			case <-n.done:
 				return
 			default:
 				nRead, srcAddr, err := conn.ReadFromUDP(buf)
@@ -330,9 +365,10 @@ func (n *Node) Run(lookupSvc string) {
 					for _, p := range n.PeerMgr.List() {
 						n.GossipM.SendUDP(outD, p)
 					}
+					// già dopo il tuo log “Peer X DEAD…”
+					n.PeerMgr.Remove(d.Peer)
 					n.Registry.RemoveProvider(d.Peer)
 					n.updateQuorum()
-
 				case proto.MsgLeave:
 					lv, err := proto.DecodeLeave(env.Data)
 					if err != nil {
@@ -379,11 +415,12 @@ func (n *Node) Run(lookupSvc string) {
 			fmt.Printf("Service %s NOT found", lookupSvc)
 		}
 
-		close(done)
-		conn.Close()
+		n.Shutdown()
 		return
+
 	}
 
 	// 5. Nodo normale: non esce mai
-	select {}
+	<-n.done
+	return
 }

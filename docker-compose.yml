@@ -11,6 +11,7 @@ services:
   node1:
     build: .
     container_name: node1
+    stop_signal: SIGTERM
     depends_on: [registry]
     command:
       - "--id=node1:9001"
@@ -20,9 +21,11 @@ services:
     ports:
       - "9001:9001/udp"
 
+
   node2:
     build: .
     container_name: node2
+    stop_signal: SIGTERM
     depends_on: [registry]
     command:
       - "--id=node2:9002"
@@ -35,6 +38,7 @@ services:
   node3:
     build: .
     container_name: node3
+    stop_signal: SIGTERM
     depends_on: [registry]
     command:
       - "--id=node3:9003"
@@ -47,6 +51,7 @@ services:
   node4:
     build: .
     container_name: node4
+    stop_signal: SIGTERM
     depends_on: [registry]
     command:
       - "--id=node4:9004"
@@ -59,6 +64,7 @@ services:
   node5:
     build: .
     container_name: node5
+    stop_signal: SIGTERM
     depends_on: [registry]
     command:
       - "--id=node5:9005"
@@ -71,6 +77,7 @@ services:
   lookup:
     build: .
     container_name: lookup
+    stop_signal: SIGTERM
     depends_on: [registry, node1, node2, node3]
     entrypoint: ["gossip-node"]
     command:
