@@ -1,21 +1,24 @@
 package node
 
 import (
+	"ProgettoSDCC/pkg/proto"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"ProgettoSDCC/pkg/proto"
 )
 
 type Node struct {
+	rumorMu  sync.RWMutex // ← NUOV
 	PeerMgr  *PeerManager
 	Registry *ServiceRegistry
 	Digests  *DigestManager
@@ -31,10 +34,10 @@ type Node struct {
 	quorumThreshold int             // soglia di quorum per confermare dead
 	initialSeeds    []string        // i seed passati in --peers
 	seenLeave       map[string]bool // peer → già processato Leave
-
-	udpConn      *net.UDPConn
-	done         chan struct{}
-	gossipTicker *time.Ticker
+	handledDead     map[string]bool
+	udpConn         *net.UDPConn
+	done            chan struct{}
+	gossipTicker    *time.Ticker
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -48,6 +51,7 @@ func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
 }
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
+
 	parts := strings.Split(id, ":")
 	if len(parts) != 2 {
 		log.Fatalf("invalid id %s", id)
@@ -63,12 +67,15 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	reg.AddLocal(id, svcCSV)
 
 	dm := NewDigestManager()
-	gm := NewGossipManager(pm, dm, reg, id)
+
+	src := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(src)
+	gm := NewGossipManager(pm, dm, reg, id, r)
 
 	// quorumThreshold iniziale verrà calcolato da updateQuorum()
 	quorum := 0
 	// FailureDetector ora accetta gossip manager e due timeout
-	fd := NewFailureDetector(pm, reg, gm, 15*time.Second, 20*time.Second)
+	fd := NewFailureDetector(pm, reg, gm, 15*time.Second, 22*time.Second)
 
 	n := &Node{
 		PeerMgr:  pm,
@@ -82,6 +89,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		suspectCount:    make(map[string]int),
 		seenSuspect:     make(map[string]bool),
 		seenDead:        make(map[string]bool),
+		handledDead:     make(map[string]bool),
 		quorumThreshold: quorum,
 		initialSeeds:    seeds,
 		seenLeave:       make(map[string]bool),
@@ -127,6 +135,18 @@ func (n *Node) alivePeers() []string {
 	return out
 }
 
+func (n *Node) hasLeft(peer string) bool {
+	n.rumorMu.RLock()
+	left := n.seenLeave[peer]
+	n.rumorMu.RUnlock()
+	return left
+}
+
+func (n *Node) markLeft(peer string) {
+	n.rumorMu.Lock()
+	n.seenLeave[peer] = true
+	n.rumorMu.Unlock()
+}
 func (pm *PeerManager) AddIfNew(peer string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -168,6 +188,17 @@ func (n *Node) Shutdown() {
 	time.Sleep(100 * time.Millisecond)
 	log.Printf("← Shutdown completa, exit(0)")
 	os.Exit(0)
+}
+
+// randomSubset estrae fino a n peer a caso da peers
+func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
+	if len(peers) <= k {
+		return peers
+	}
+	out := make([]string, len(peers))
+	copy(out, peers)
+	rnd.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	return out[:k]
 }
 
 func (n *Node) Run(lookupSvc string) {
@@ -318,26 +349,55 @@ func (n *Node) Run(lookupSvc string) {
 					if err == nil {
 						log.Printf("RX LookupResponse %s → %s", lrsp.ID, lrsp.Provider)
 					}
-
+					// dentro il main loop ------------------------------------------
 				case proto.MsgSuspect:
-					// 1) decodifica e dedup
+					// 1) decode
 					r, err := proto.DecodeSuspectRumor(env.Data)
-					if err != nil || n.seenSuspect[r.RumorID] {
+					if err != nil {
 						break
 					}
-					n.seenSuspect[r.RumorID] = true
 
-					// 2) incremento il conteggio dei sospetti per quel peer
+					// 2) dedup, mark-as-seen e check Leave **in sezione critica**
+					n.rumorMu.Lock()
+					if n.seenSuspect[r.RumorID] { // già visto → basta
+						n.rumorMu.Unlock()
+						break
+					}
+					n.seenSuspect[r.RumorID] = true // lo segniamo
+
+					if n.seenLeave[r.Peer] { // peer è già LEFT
+						n.rumorMu.Unlock()
+						break // ignoriamo il suspect
+					}
+
+					// aggiorniamo il contatore dentro lo stesso lock
 					n.suspectCount[r.Peer]++
+					votes := n.suspectCount[r.Peer] // ci serve dopo
+					firstRpt := votes == 1
+					n.rumorMu.Unlock() // fine sezione critica
 
-					// 3) rilancio sempre il SuspectRumor a tutti i peer
+					if firstRpt {
+						log.Printf("Peer %s SUSPECT — primo rumor ricevuto da %s (%d/%d)",
+							r.Peer, env.From, votes, n.quorumThreshold)
+					}
+					// 3) fan-out parametrico (come prima)
+					peers := n.PeerMgr.List()
+					nPeers := len(peers)
+					if nPeers == 0 {
+						break
+					}
+					k := int(math.Ceil(math.Log2(float64(nPeers))))
+					if k < 1 {
+						k = 1
+					}
 					outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
-					for _, p := range n.PeerMgr.List() {
+					for _, p := range randomSubset(peers, k, n.GossipM.rnd) {
 						n.GossipM.SendUDP(outS, p)
 					}
 
-					// 4) appena raggiungi il quorum (2), logga e genera il DeadRumor
-					if n.suspectCount[r.Peer] == n.quorumThreshold {
+					// 4) se abbiamo raggiunto il quorum, generiamo DeadRumor
+					if votes == n.quorumThreshold && !n.handledDead[r.Peer] {
+						n.handledDead[r.Peer] = true
 						log.Printf("Peer %s DEAD (quorum %d raggiunto)", r.Peer, n.quorumThreshold)
 
 						d := proto.DeadRumor{
@@ -345,30 +405,53 @@ func (n *Node) Run(lookupSvc string) {
 							Peer:    r.Peer,
 						}
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-						for _, p := range n.PeerMgr.List() {
+						for _, p := range randomSubset(peers, k, n.GossipM.rnd) {
 							n.GossipM.SendUDP(outD, p)
 						}
-						// rimuovo il provider una sola volta
+						n.PeerMgr.Remove(r.Peer) // ② lo togli dalla lista viva
+						delete(n.suspectCount, r.Peer)
 						n.Registry.RemoveProvider(r.Peer)
 						n.updateQuorum()
 					}
 
 				case proto.MsgDead:
 					d, err := proto.DecodeDeadRumor(env.Data)
-					if err != nil || n.seenDead[d.RumorID] {
+					if err != nil {
 						break
 					}
-					n.seenDead[d.RumorID] = true
-					log.Printf("Peer %s DEAD (ricevuto rumor %s)", d.Peer, d.RumorID)
-					// rilancio dead rumor
+
+					// ───────── sezione critica ────────────────────────────────────
+					n.rumorMu.Lock()
+					if n.seenDead[d.RumorID] || // rumor già visto
+						n.seenLeave[d.Peer] || // il peer era uscito volontariamente
+						n.handledDead[d.Peer] { // abbiamo già gestito la sua morte
+						n.rumorMu.Unlock()
+						break
+					}
+
+					n.seenDead[d.RumorID] = true // marchiamo il rumor
+					n.handledDead[d.Peer] = true // blocchiamo ogni futuro Dead/Suspect
+					n.rumorMu.Unlock()
+					// ───────────────────────────────────────────────────────────────
+
+					log.Printf("Peer %s DEAD — rumor ricevuto da %s (%s)", d.Peer, env.From, d.RumorID)
+
+					// fan-out parametrico
+					alive := n.alivePeers()
+					k := int(math.Ceil(math.Log2(float64(len(alive)))))
+					if k < 1 {
+						k = 1
+					}
 					outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-					for _, p := range n.PeerMgr.List() {
+					for _, p := range randomSubset(alive, k, n.GossipM.rnd) {
 						n.GossipM.SendUDP(outD, p)
 					}
-					// già dopo il tuo log “Peer X DEAD…”
+
 					n.PeerMgr.Remove(d.Peer)
+					delete(n.suspectCount, d.Peer) // ← ripulisci i voti
 					n.Registry.RemoveProvider(d.Peer)
 					n.updateQuorum()
+
 				case proto.MsgLeave:
 					lv, err := proto.DecodeLeave(env.Data)
 					if err != nil {
@@ -377,26 +460,36 @@ func (n *Node) Run(lookupSvc string) {
 					}
 					peer := lv.Peer
 
-					// se l'abbiamo già visto, ignora
-					if n.seenLeave[peer] {
+					// sezione critica ------------------------------------------------
+					n.rumorMu.Lock()
+					if n.seenLeave[peer] { // già visto
+						n.rumorMu.Unlock()
 						break
 					}
-					n.seenLeave[peer] = true
+					n.seenLeave[peer] = true // marchio il leave
+					n.rumorMu.Unlock()       // fine sezione critica
+					// ----------------------------------------------------------------
 
 					log.Printf("Peer %s → LEFT voluntarily", peer)
 
-					// propaga una sola volta
+					// gossip leggero
+					alive := n.alivePeers() // include solo i peer ancora up
+					k := int(math.Ceil(math.Log2(float64(len(alive)))))
+					if k < 1 {
+						k = 1
+					}
 					raw, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
-					for _, p := range n.PeerMgr.List() {
-						if p != env.From {
-							n.GossipM.SendUDP(raw, p)
+					for _, p := range randomSubset(alive, k, n.GossipM.rnd) {
+						if p == env.From { // evito rinvio al mittente
+							continue
 						}
+						n.GossipM.SendUDP(raw, p)
 					}
 
-					// pulizia definitiva
 					n.PeerMgr.Remove(peer)
 					n.Registry.RemoveProvider(peer)
 					n.updateQuorum()
+
 				default:
 					log.Printf("unknown msg type %d", env.Type)
 				}

@@ -1,95 +1,10 @@
-✅ Completato finora
-
-Implementazione messaggi MsgLookup e MsgLookupResponse (proto)
-
-Reactive client lookup con TTL e fanout
-
-Forwarding rumor con decremento TTL
-
-Risposta diretta su conn.WriteToUDP al sender
-
-Failure detector con rimozione servizi
-
-    Test: Failover provider node2
-
-🧩 TODO – Feature/Code
-🔄 1. Rumor deduplication (minimo necessario se TTL > 1)
-
-Memorizzare gli ID dei rumor già visti (seenLookup map[string]bool)
-
-    Evitare di inoltrare più volte la stessa richiesta
-
-🔢 2. TTL troppo basso
-
-Se TTL = 0 → il nodo non inoltra nulla
-
-    Se TTL = 1 → un solo hop
-
-🛤️ 3. Multi-hop relay (A → B → C)
-
-Introdurre node3 nella mesh
-
-Configurare una topologia A ↔ B ↔ C, dove solo C ha il servizio
-
-    Fare in modo che A scopra “orders” passando per B (con TTL ≥ 2)
-
-➕ 4. Join dinamico (provider che si aggiunge dopo)
-
-Avvia node1 e node2 senza “orders”
-
-Avvia node3 con --services=orders dopo qualche secondo
-
-    Confermare che il servizio diventa disponibile per lookup
-
-🌐 5. Partition e recovery
-
-Simulare disconnessione temporanea di node2
-
-Verificare che venga marcato DEAD e i suoi servizi scompaiano
-
-    Riconnessione → ritorno heartbeat e servizi nel registry
-
-🔍 TODO – Test (da eseguire uno alla volta)
-Test	Obiettivo	Fatto
-✅ Failover provider	Verifica risposta NOT found se provider giù	✅
-TTL = 0 / TTL = 1	Controlla che la richiesta non arrivi troppo lontano	☐
-Multi-hop forwarding	A → B → C, TTL=2	☐
-Join dinamico di provider	node3 si unisce offrendo il servizio	☐
-Partition e riconnessione	node2 si isola, poi torna	☐
-
-Fammi sapere da quale vuoi partire ora: TTL, forwarding a 3 nodi o join dinamico?
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-15/07
-vedere se effettivamente è giusto k fault tollerance
-vedere timer dinamico
-differenziare leave volontario da crash, magari tramite id
-fixare qualche log
-service discovery   facendo rumor spreading
+| #     | Task                                                                                                                                                                                                                                                                                                                                                                                         | Output atteso / test                                                                                                 |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **1** | **Portare il gossip da “a tutti” a “k = ⌈log₂ N⌉ + 1 peer random ad ogni round”**<br>• Aggiungi `rand.Seed(time.Now().UnixNano())` nel `main`.<br>• Nel `GossipManager.Start()`<br>  – riduci il ticker a 1 s;<br>  – calcola `k` sul len(peers);<br>  – `rand.Shuffle` e invia solo ai primi `k`;<br>  – dopo `SendUDP` fai `gm.peers.Seen(peer)` per non far scattare il FD lato mittente. | • In un cluster di 8 nodi, ogni nodo continua a ricevere almeno un pacchetto < 15 s.<br>• Nessun falso “SUSPICIOUS”. |
+| **2** | **Mandare heartbeat anche se il digest non cambia** (almeno la versione “digest-only”).                                                                                                                                                                                                                                                                                                      | Il campo `LastSeen` di ogni peer si aggiorna comunque → nessun falso suspect quando il cluster è stabile.            |
+| **3** | **Regolare i timeout del FailureDetector** (facoltativo): con ticker a 1 s puoi ridurre `suspectTimeout` a 6-8 s per test più rapidi.                                                                                                                                                                                                                                                        | Crash simulato con `docker kill -9 nodeX` → SUSPICIOUS dopo \~timeout, DEAD dopo quorum.                             |
+| **4** | **Pulizia GossipManager**<br>• separa `sendFullHeartbeat()` e `sendDigest()`;<br>• usa due ticker (veloce + lento) se vuoi ottimizzare la banda.                                                                                                                                                                                                                                             | Banda ridotta, ma il detector rimane affidabile.                                                                     |
+| **5** | **Service Discovery**<br>Implementa definitivamente `MsgLookup`, `MsgLookupResponse` (molto è già presente):<br>• TTL decrementa a ogni hop;<br>• risposta diretta UDP al client.                                                                                                                                                                                                            | Esegui il container `lookup` → deve stampare l’indirizzo del provider corretto.                                      |
+| **6** | **Gestione dinamica dei servizi**<br>• comandi CLI o API per aggiungere/rimuovere un servizio a runtime;<br>• verifica che il digest cambi e il nuovo stato si propaghi.                                                                                                                                                                                                                     | Aggiungi “analytics” a node3 → in pochi secondi un lookup trova node3.                                               |
+| **7** | **Handling dei Leave volontari** (già a buon punto, ma testa)<br>• `docker stop nodeX` → gli altri loggano `LEFT voluntarily`, quorum si aggiorna senza falsi dead.                                                                                                                                                                                                                          | –                                                                                                                    |
+| **8** | **Pulizia e metriche**<br>• metrica Prometheus o semplice `/metrics` HTTP con: nodi alive, rumor spediti, heartbeat inviati.<br>• utile per demo finale su EC2.                                                                                                                                                                                                                              | `curl node1:9100/metrics` restituisce i contatori.                                                                   |

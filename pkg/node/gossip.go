@@ -1,6 +1,8 @@
 package node
 
 import (
+	"math"
+	"math/rand"
 	"net"
 	"time"
 )
@@ -10,29 +12,54 @@ type GossipManager struct {
 	digest *DigestManager
 	reg    *ServiceRegistry
 	self   string
+
+	// rnd è il generatore casuale locale
+	rnd *rand.Rand
 }
 
-func NewGossipManager(pm *PeerManager, dm *DigestManager, reg *ServiceRegistry, selfID string) *GossipManager {
+// NewGossipManager ora riceve un generatore *rand.Rand
+func NewGossipManager(pm *PeerManager, dm *DigestManager, reg *ServiceRegistry, selfID string, r *rand.Rand) *GossipManager {
 	return &GossipManager{
 		peers:  pm,
 		digest: dm,
 		reg:    reg,
 		self:   selfID,
+		rnd:    r,
 	}
 }
 
 func (gm *GossipManager) Start() {
-	ticker := time.NewTicker(3 * time.Second)
+	// round di gossip ogni 1 secondo
+	ticker := time.NewTicker(1 * time.Second)
 	go func() {
 		for range ticker.C {
-			d := gm.digest.Compute(gm.reg)
-			for _, peer := range gm.peers.List() {
-				if gm.digest.Changed(peer, d) {
-					msg := MakeHeartbeatWithDigest(gm.reg, gm.self, d, gm.peers.List())
-
-					gm.SendUDP(msg, peer)
-				}
+			peers := gm.peers.List()
+			n := len(peers)
+			if n == 0 {
+				continue
 			}
+
+			// digest corrente dello stato servizi
+			digest := gm.digest.Compute(gm.reg)
+
+			// k = ceil(log2(n)), almeno 1 ma non oltre n
+			k := int(math.Ceil(math.Log2(float64(n))))
+			if k < 1 {
+				k = 1
+			}
+			if k > n {
+				k = n
+			}
+
+			// mescola i peer casualmente
+			gm.rnd.Shuffle(n, func(i, j int) { peers[i], peers[j] = peers[j], peers[i] })
+
+			// invia solo ai primi k peer
+			for _, peer := range peers[:k] {
+				msg := MakeHeartbeatWithDigest(gm.reg, gm.self, digest, gm.peers.List())
+				gm.SendUDP(msg, peer)
+			}
+
 		}
 	}()
 }

@@ -56,9 +56,10 @@ docker rm -f node6
 
  killare in maniera forzata
  # prendi TUTTI gli id dei container incriminati (nome che inizia per node o registry)
+  # per ciascun id estrai il PID host
  IDS=$(docker ps -a --filter "name=node" --filter "name=registry" -q)
 
- # per ciascun id estrai il PID host
+
  for id in $IDS; do
    echo "Container $id:"
    docker inspect -f ' PID = {{.State.Pid}}' "$id"
@@ -71,3 +72,9 @@ for id in $IDS; do
     sudo kill -9 "$PID"
   fi
 done
+
+
+
+
+sudo aa-remove-unknown        # pulisce i profili zombie
+sudo systemctl restart docker
