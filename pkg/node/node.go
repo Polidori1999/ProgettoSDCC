@@ -290,6 +290,10 @@ func (n *Node) Run(lookupSvc string) {
 								}
 							}
 							n.suspectCount[peer] = 0
+							// ← AGGIUNTO: tolgo il flag "già gestito dead"
+							delete(n.handledDead, peer)
+							// ← AGGIUNTO: riattivo il suo failure-detector
+							n.FailureD.UnsuppressPeer(peer)
 							log.Printf("Peer %s RI-ENTRATO: resetto failure-detector", peer)
 
 						}
@@ -359,7 +363,7 @@ func (n *Node) Run(lookupSvc string) {
 
 					// 2) dedup, mark-as-seen e check Leave **in sezione critica**
 					n.rumorMu.Lock()
-					if n.seenSuspect[r.RumorID] { // già visto → basta
+					if n.seenSuspect[r.RumorID] || n.seenLeave[r.Peer] || n.handledDead[r.Peer] { // peer già dichiarato morto
 						n.rumorMu.Unlock()
 						break
 					}
@@ -404,6 +408,9 @@ func (n *Node) Run(lookupSvc string) {
 							RumorID: fmt.Sprintf("dead|%s|%d", r.Peer, time.Now().UnixNano()),
 							Peer:    r.Peer,
 						}
+						n.rumorMu.Lock()
+						n.seenDead[d.RumorID] = true // ← così il nodo sa di aver “visto” quel dead
+						n.rumorMu.Unlock()
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
 						for _, p := range randomSubset(peers, k, n.GossipM.rnd) {
 							n.GossipM.SendUDP(outD, p)
@@ -448,7 +455,9 @@ func (n *Node) Run(lookupSvc string) {
 					}
 
 					n.PeerMgr.Remove(d.Peer)
+					n.FailureD.SuppressPeer(d.Peer)
 					delete(n.suspectCount, d.Peer) // ← ripulisci i voti
+
 					n.Registry.RemoveProvider(d.Peer)
 					n.updateQuorum()
 
@@ -503,7 +512,7 @@ func (n *Node) Run(lookupSvc string) {
 		time.Sleep(8 * time.Second)
 
 		if p, ok := n.Registry.Lookup(lookupSvc); ok {
-			fmt.Printf("Service %s → %s", lookupSvc, p)
+			fmt.Printf("	Service %s → %s", lookupSvc, p)
 		} else {
 			fmt.Printf("Service %s NOT found", lookupSvc)
 		}
