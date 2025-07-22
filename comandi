@@ -15,20 +15,25 @@ docker compose build
 per aggiungere nuovo nodo
 
 
-docker run -d \
-  --name=node6 \
-  --stop-signal=SIGTERM \
-  --network progettosdcc_default \
-  -p 9006:9006/udp \
-  progettosdcc-node \
-    --id=node6:9006 \
-    --port=9006 \
-    --registry=registry:9000 \
-    --services=analytics
+docker run --rm --name lookup-node --stop-signal=SIGTERM \
+  --network progettosdcc_default -p 9006:9006/udp \
+  progettosdcc-node:latest \
+  --id=node6:9006 --port=9006 --peers=node1:9001 --lookup=payments
+
 
 per toglierlo
 docker rm -f node6
 
+docker run --rm \                          # lo elimini quando esce
+  --name lookup-node \                     # nome del container
+  --stop-signal=SIGTERM \                  # chiude in modo “graceful”
+  --network progettosdcc_default \         # stessa network degli altri
+  -p 9006:9006/udp \                       # apre la porta UDP (facoltativo se è solo client)
+  progettosdcc-node:latest \               # immagine buildata da compose
+  --id=node6:9006 \                        # host:porta che userà nel cluster
+  --port=9006 \                            # la porta su cui ascolta
+  --peers=node1:9001 \                     # almeno un seed già up (puoi metterne più di uno, virgole)
+  --lookup=payments                        # ***il servizio da cercare***
 
 
 

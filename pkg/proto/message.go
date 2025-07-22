@@ -26,11 +26,22 @@ type Envelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//	HeartbeatDigest: versione leggera inviata ogni secondo
+//
+// ─────────────────────────────────────────────────────────────────────────────
+type HeartbeatDigest struct {
+	Digest string   `json:"digest"`          // SHA-1 del mio snapshot locale
+	Peers  []string `json:"peers,omitempty"` // piggy-back dei peer noti
+}
+
 // ---------- payload ----------
 type Heartbeat struct {
-	Services []string `json:"services,omitempty"`
-	Digest   string   `json:"digest,omitempty"`
-	Peers    []string `json:"peers,omitempty"`
+	// ― versione “full”, usata solo nell’anti-entropy (step 2)
+	Services []string `json:"services"`        // elenco servizi offerti
+	Digest   string   `json:"digest"`          // snapshot SHA-1
+	Peers    []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
 }
 type Leave struct {
 	Peer string `json:"peer"`
@@ -78,6 +89,17 @@ func Decode(b []byte) (Envelope, error) {
 	var env Envelope
 	err := json.Unmarshal(b, &env)
 	return env, err
+}
+
+// ---------- heartbeat-digest helpers ----------
+func EncodeHeartbeatDigest(from string, hb HeartbeatDigest) ([]byte, error) {
+	return Encode(MsgHeartbeatDigest, from, hb)
+}
+
+func DecodeHeartbeatDigest(raw json.RawMessage) (HeartbeatDigest, error) {
+	var hb HeartbeatDigest
+	err := json.Unmarshal(raw, &hb)
+	return hb, err
 }
 
 func DecodeHeartbeat(raw json.RawMessage) (Heartbeat, error) {

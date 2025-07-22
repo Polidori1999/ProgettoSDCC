@@ -123,6 +123,7 @@ func (fd *FailureDetector) Start() {
 								fd.gossip.SendUDP(out, p)
 							}
 						}
+
 						// rimozione locale
 						fd.peers.Remove(peer)
 						fd.reg.RemoveProvider(peer)

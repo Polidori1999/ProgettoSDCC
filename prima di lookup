@@ -1,3 +1,315 @@
+failure
+
+
+package node
+
+import (
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"ProgettoSDCC/pkg/proto"
+)
+
+type FailureDetector struct {
+	mu             sync.Mutex
+	peers          *PeerManager
+	reg            *ServiceRegistry
+	gossip         *GossipManager
+	suspectTimeout time.Duration
+	failTimeout    time.Duration
+
+	suspected  map[string]bool // peer → già gossipato SuspectRumor
+	suppressed map[string]bool // peer → già gossipato DeadRumor / rimosso
+}
+
+func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager, suspectT, failT time.Duration) *FailureDetector {
+	return &FailureDetector{
+		peers:          pm,
+		reg:            reg,
+		gossip:         gm,
+		suspectTimeout: suspectT,
+		failTimeout:    failT,
+		suspected:      make(map[string]bool),
+		suppressed:     make(map[string]bool),
+	}
+}
+
+// SuppressPeer ferma ogni futura segnalazione per peer
+func (fd *FailureDetector) SuppressPeer(peer string) {
+	fd.mu.Lock()
+	fd.suppressed[peer] = true
+	delete(fd.suspected, peer)
+	fd.mu.Unlock()
+}
+
+// UnsuppressPeer riabilita peer (es. dopo un leave + heartbeat)
+func (fd *FailureDetector) UnsuppressPeer(peer string) {
+	fd.mu.Lock()
+	delete(fd.suppressed, peer)
+	delete(fd.suspected, peer)
+	fd.mu.Unlock()
+	// “Finge” di aver appena visto un heartbeat
+	fd.peers.Seen(peer)
+}
+
+// Start avvia il monitoraggio dei peer, gossippando SuspectRumor e DeadRumor.
+func (fd *FailureDetector) Start() {
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		for now := range ticker.C {
+			for _, peer := range fd.peers.List() {
+				fd.mu.Lock()
+				// se ho già dichiarato dead, skippo del tutto
+				if fd.suppressed[peer] {
+					fd.mu.Unlock()
+					continue
+				}
+				last, ok := fd.peers.LastSeen[peer]
+				fd.mu.Unlock()
+				if !ok {
+					continue
+				}
+
+				age := now.Sub(last)
+
+				// 1) se è rientrato (< suspectTimeout), resettiamo lo stato
+				if age <= fd.suspectTimeout {
+					fd.mu.Lock()
+					if fd.suspected[peer] {
+						delete(fd.suspected, peer)
+					}
+					fd.mu.Unlock()
+					continue
+				}
+
+				// 2) fase di SUSPECT
+				if age > fd.suspectTimeout && age <= fd.failTimeout {
+					fd.mu.Lock()
+					first := !fd.suspected[peer]
+					if first {
+						fd.suspected[peer] = true
+					}
+					fd.mu.Unlock()
+
+					if first {
+						log.Printf("Peer %s SUSPICIOUS (no heartbeat for %v)", peer, age)
+						rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
+						sr := proto.SuspectRumor{RumorID: rumorID, Peer: peer}
+						out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
+						if err == nil {
+							for _, p := range append(fd.peers.List(), fd.gossip.self) {
+								fd.gossip.SendUDP(out, p)
+							}
+						}
+					}
+					continue
+				}
+
+				// 3) fase di DEAD
+				if age > fd.failTimeout {
+					fd.mu.Lock()
+					already := fd.suppressed[peer]
+					if !already {
+						fd.suppressed[peer] = true
+					}
+					fd.mu.Unlock()
+
+					if !already {
+						log.Printf("Peer %s DEAD (no heartbeat for %v)", peer, age)
+						rumorID := fmt.Sprintf("dead|%s|%d", peer, now.UnixNano())
+						dr := proto.DeadRumor{RumorID: rumorID, Peer: peer}
+						out, err := proto.Encode(proto.MsgDead, fd.gossip.self, dr)
+						if err == nil {
+							for _, p := range append(fd.peers.List(), fd.gossip.self) {
+								fd.gossip.SendUDP(out, p)
+							}
+						}
+
+						// rimozione locale
+						fd.peers.Remove(peer)
+						fd.reg.RemoveProvider(peer)
+					}
+					continue
+				}
+			}
+		}
+	}()
+}
+
+
+
+
+
+
+lookup
+
+
+package node
+
+import (
+	"fmt"
+	"log"
+	"math"
+	"net"
+	"sync"
+	"time"
+
+	"ProgettoSDCC/pkg/proto"
+)
+
+const DefaultLookupTTL = 4
+
+type LookupManager struct {
+	mu       sync.Mutex
+	seenReq  map[string]bool      // dedup delle richieste in arrivo
+	negCache map[string]time.Time // negative-cache TTL per servizio
+	pending  map[string]string    // id → nome del servizio in corso di lookup
+	peers    *PeerManager
+	reg      *ServiceRegistry
+	gossip   *GossipManager
+	conn     *net.UDPConn
+}
+
+// NewLookupManager costruisce e restituisce un LookupManager
+func NewLookupManager(pm *PeerManager, sr *ServiceRegistry, gm *GossipManager, conn *net.UDPConn) *LookupManager {
+	return &LookupManager{
+		seenReq:  make(map[string]bool),
+		negCache: make(map[string]time.Time),
+		pending:  make(map[string]string),
+		peers:    pm,
+		reg:      sr,
+		gossip:   gm,
+		conn:     conn,
+	}
+}
+
+// Lookup avvia una ricerca per `service` con TTL iniziale `ttl`.
+func (lm *LookupManager) Lookup(service string, ttl int) {
+	// 1) genera un ID univoco
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// 2) registra la richiesta in pending
+	lm.mu.Lock()
+	lm.pending[id] = service
+	lm.mu.Unlock()
+
+	// 3) costruisci il LookupRequest
+	req := proto.LookupRequest{
+		ID:      id,
+		Service: service,
+		TTL:     ttl,
+	}
+	msg, _ := proto.Encode(proto.MsgLookup, lm.gossip.self, req)
+
+	// 4) prendi la lista dei peer noti
+	peers := lm.peers.List()
+	if len(peers) == 0 {
+		log.Printf("no peers available for lookup %s", service)
+		return
+	}
+
+	// 5) scegli 1 peer a caso e invia
+	peer := peers[lm.gossip.rnd.Intn(len(peers))]
+	lm.gossip.SendUDP(msg, peer)
+	log.Printf("TX Lookup %s TTL=%d → %s", service, ttl, peer)
+}
+
+// HandleRequest processa un MsgLookup in arrivo (forwarding & negative-cache)
+func (lm *LookupManager) HandleRequest(env proto.Envelope, src *net.UDPAddr) {
+	lr, err := proto.DecodeLookupRequest(env.Data)
+	if err != nil {
+		log.Printf("bad LookupRequest: %v", err)
+		return
+	}
+
+	log.Printf("RX Lookup %s TTL=%d from %s", lr.Service, lr.TTL, env.From)
+
+	lm.mu.Lock()
+	if lm.seenReq[lr.ID] {
+		lm.mu.Unlock()
+		return
+	}
+	lm.seenReq[lr.ID] = true
+	// negative cache
+	if t, ok := lm.negCache[lr.Service]; ok && time.Now().Before(t) {
+		lm.mu.Unlock()
+		return
+	}
+	lm.mu.Unlock()
+
+	// 1) se ho il servizio, rispondo subito
+	if provider, ok := lm.reg.Lookup(lr.Service); ok {
+		resp := proto.LookupResponse{
+			ID:       lr.ID,
+			Provider: provider,
+		}
+		out, _ := proto.Encode(proto.MsgLookupResponse, lm.gossip.self, resp)
+		lm.conn.WriteToUDP(out, src)
+		log.Printf("  -> replied %s → %s", lr.Service, provider)
+		return
+	}
+
+	// 2) forward se TTL>0
+	if lr.TTL > 0 {
+		lr.TTL--
+		out, _ := proto.Encode(proto.MsgLookup, lm.gossip.self, lr)
+		peers := lm.peers.List()
+		k := int(math.Ceil(math.Log2(float64(len(peers)))))
+		if k < 1 {
+			k = 1
+		}
+		for _, p := range randomSubset(peers, k, lm.gossip.rnd) {
+			if p == env.From {
+				continue
+			}
+			lm.gossip.SendUDP(out, p)
+		}
+		log.Printf("  -> forwarded TTL=%d", lr.TTL)
+	} else {
+		// 3) TTL esaurito → metto in negative cache per 30s
+		lm.mu.Lock()
+		lm.negCache[lr.Service] = time.Now().Add(30 * time.Second)
+		lm.mu.Unlock()
+	}
+}
+
+// HandleResponse processa un MsgLookupResponse, aggiorna registry e cancella la pending
+func (lm *LookupManager) HandleResponse(env proto.Envelope) {
+	lrsp, err := proto.DecodeLookupResponse(env.Data)
+	if err != nil {
+		return
+	}
+	log.Printf("RX LookupResponse %s → %s", lrsp.ID, lrsp.Provider)
+
+	// se era una richiesta pendente, la togliamo
+	lm.mu.Lock()
+	service, wasPending := lm.pending[lrsp.ID]
+	if wasPending {
+		delete(lm.pending, lrsp.ID)
+	}
+	lm.mu.Unlock()
+
+	// aggiorna registry locale (per future lookup)
+	if wasPending {
+		lm.reg.Update(lrsp.Provider, []string{service})
+		log.Printf("  -> registry updated: %s → %s", service, lrsp.Provider)
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+node
+
 package node
 
 import (
