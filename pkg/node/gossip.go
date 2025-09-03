@@ -44,6 +44,19 @@ func (gm *GossipManager) Start() {
 			}
 		}
 	}()
+	//da inserire
+	/*go func() {
+	    for {
+	        time.Sleep(2*time.Second + time.Duration(gm.rnd.Intn(400)-200)*time.Millisecond)
+	        gm.sendLightHB()
+	    }
+	}()
+	go func() {
+	    for {
+	        time.Sleep(15*time.Second + time.Duration(gm.rnd.Intn(1500)-750)*time.Millisecond)
+	        gm.sendFullHB()
+	    }
+	}()*/
 }
 
 func (gm *GossipManager) sendLightHB() {

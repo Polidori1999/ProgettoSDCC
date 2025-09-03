@@ -91,9 +91,9 @@ func main() {
 	}
 
 	var peerList []string
-	if *lookupFlag != "" {
-		log.Printf("[INFO] Nodo in modalità lookup, nessuna registrazione al registry")
-		peerList = []string{}
+	if *lookupFlag != "" && *registryFlag != "" {
+		log.Printf("[INFO] Lookup mode: bootstrap dal registry %s", *registryFlag)
+		peerList = fetchRegistryPeers(*registryFlag, *idFlag)
 	} else if *registryFlag != "" {
 
 		log.Printf("[DBG] Bootstrapping dal registry %s…", *registryFlag)

@@ -10,7 +10,7 @@ docker rm $(docker ps -a --filter network=progettosdcc_default -q)
 docker network rm progettosdcc_default
 
 docker compose build
- docker compose up -d registry node1 node2 node3 node4 node5
+docker compose up -d registry node1 node2 node3 node4 node5
 
 per aggiungere nuovo nodo
 

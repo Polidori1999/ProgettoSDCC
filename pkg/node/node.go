@@ -326,42 +326,99 @@ func (n *Node) Run(lookupSvc string) {
 						break
 					}
 
+					// 1a) rumor "tardivo": se io ho visto il peer DOPO il timestamp del rumor, ignoro
+					tsRumor := time.Unix(0, env.TS)
+					if last, ok := n.PeerMgr.GetLastSeen(r.Peer); ok && last.After(tsRumor) {
+						log.Printf("ignoro SUSPECT tardivo su %s: rumorTS=%v < lastSeen=%v",
+							r.Peer, tsRumor, last)
+						break
+					}
+
+					// 1b) FILTRO LOCALE: se per me il peer è ancora "fresco", NON voto (forward-only una sola volta)
+					if last, ok := n.PeerMgr.GetLastSeen(r.Peer); ok {
+						age := time.Since(last)
+						if age < n.FailureD.suspectTimeout {
+							// dedup + skip se già morto/left, tutto in lock
+							n.rumorMu.Lock()
+							if n.seenSuspect[r.RumorID] || n.seenLeave[r.Peer] || n.handledDead[r.Peer] {
+								n.rumorMu.Unlock()
+								break
+							}
+							n.seenSuspect[r.RumorID] = true
+							n.rumorMu.Unlock()
+
+							log.Printf("(%s) Ignoro VOTO su %s: rumorID=%s da %s (age=%v < suspectTimeout=%v) — forward only",
+								n.ID, r.Peer, r.RumorID, env.From, age, n.FailureD.suspectTimeout)
+
+							// fan-out leggero (k = ceil(log2(n))) escludendo il sospetto
+							peers := n.PeerMgr.List()
+							if len(peers) > 0 {
+								filtered := make([]string, 0, len(peers))
+								for _, p := range peers {
+									if p != r.Peer {
+										filtered = append(filtered, p)
+									}
+								}
+								if len(filtered) > 0 {
+									k := int(math.Ceil(math.Log2(float64(len(filtered)))))
+									if k < 1 {
+										k = 1
+									}
+									outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
+									for _, p := range randomSubset(filtered, k, n.GossipM.rnd) {
+										n.GossipM.SendUDP(outS, p)
+									}
+								}
+							}
+							break // ← non conteggio il voto
+						}
+					}
+
 					// 2) dedup, mark-as-seen e check Leave **in sezione critica**
 					n.rumorMu.Lock()
-					if n.seenSuspect[r.RumorID] || n.seenLeave[r.Peer] || n.handledDead[r.Peer] { // peer già dichiarato morto
+					if n.seenSuspect[r.RumorID] || n.seenLeave[r.Peer] || n.handledDead[r.Peer] {
 						n.rumorMu.Unlock()
 						break
 					}
-					n.seenSuspect[r.RumorID] = true // lo segniamo
+					n.seenSuspect[r.RumorID] = true // segno come visto
 
 					if n.seenLeave[r.Peer] { // peer è già LEFT
 						n.rumorMu.Unlock()
 						break // ignoriamo il suspect
 					}
 
-					// aggiorniamo il contatore dentro lo stesso lock
+					// aggiorno contatore e prendo snapshot dei votes
 					n.suspectCount[r.Peer]++
-					votes := n.suspectCount[r.Peer] // ci serve dopo
+					votes := n.suspectCount[r.Peer]
 					firstRpt := votes == 1
 					n.rumorMu.Unlock() // fine sezione critica
 
 					if firstRpt {
-						log.Printf("Peer %s SUSPECT — primo rumor ricevuto da %s (%d/%d)",
-							r.Peer, env.From, votes, n.quorumThreshold)
+						log.Printf("(%s) Peer %s SUSPECT — primo rumor da %s (%d/%d) rumorID=%s",
+							n.ID, r.Peer, env.From, votes, n.quorumThreshold, r.RumorID)
 					}
-					// 3) fan-out parametrico (come prima)
+
+					// 3) fan-out parametrico (k = ceil(log2(n))) escludendo il sospetto
 					peers := n.PeerMgr.List()
-					nPeers := len(peers)
-					if nPeers == 0 {
+					if len(peers) == 0 {
 						break
 					}
-					k := int(math.Ceil(math.Log2(float64(nPeers))))
-					if k < 1 {
-						k = 1
+					filtered := make([]string, 0, len(peers))
+					for _, p := range peers {
+						if p != r.Peer {
+							filtered = append(filtered, p)
+						}
 					}
-					outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
-					for _, p := range randomSubset(peers, k, n.GossipM.rnd) {
-						n.GossipM.SendUDP(outS, p)
+					k := 1
+					if len(filtered) > 0 {
+						k := int(math.Ceil(math.Log2(float64(len(filtered)))))
+						if k < 1 {
+							k = 1
+						}
+						outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
+						for _, p := range randomSubset(filtered, k, n.GossipM.rnd) {
+							n.GossipM.SendUDP(outS, p)
+						}
 					}
 
 					// 4) se abbiamo raggiunto il quorum, generiamo DeadRumor
@@ -374,13 +431,17 @@ func (n *Node) Run(lookupSvc string) {
 							Peer:    r.Peer,
 						}
 						n.rumorMu.Lock()
-						n.seenDead[d.RumorID] = true // ← così il nodo sa di aver “visto” quel dead
+						n.seenDead[d.RumorID] = true
 						n.rumorMu.Unlock()
+
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-						for _, p := range randomSubset(peers, k, n.GossipM.rnd) {
-							n.GossipM.SendUDP(outD, p)
+						// riuso lo stesso k/filtered del fanout sopra
+						if len(filtered) > 0 {
+							for _, p := range randomSubset(filtered, k, n.GossipM.rnd) {
+								n.GossipM.SendUDP(outD, p)
+							}
 						}
-						n.PeerMgr.Remove(r.Peer) // ② lo togli dalla lista viva
+						n.PeerMgr.Remove(r.Peer)
 						delete(n.suspectCount, r.Peer)
 						n.Registry.RemoveProvider(r.Peer)
 						n.updateQuorum()
@@ -392,6 +453,13 @@ func (n *Node) Run(lookupSvc string) {
 						break
 					}
 
+					tsRumor := time.Unix(0, env.TS)
+					if last, ok := n.PeerMgr.GetLastSeen(d.Peer); ok && last.After(tsRumor) {
+						log.Printf("ignoro %s tardivo su %s: rumorTS=%v < lastSeen=%v",
+							map[proto.MsgType]string{proto.MsgSuspect: "SUSPECT", proto.MsgDead: "DEAD"}[env.Type],
+							d.Peer, tsRumor, last)
+						break
+					}
 					// ───────── sezione critica ────────────────────────────────────
 					n.rumorMu.Lock()
 					if n.seenDead[d.RumorID] || // rumor già visto

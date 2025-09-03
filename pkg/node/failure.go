@@ -1,12 +1,12 @@
 package node
 
 import (
+	"ProgettoSDCC/pkg/proto"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
-
-	"ProgettoSDCC/pkg/proto"
 )
 
 type FailureDetector struct {
@@ -56,18 +56,14 @@ func (fd *FailureDetector) Start() {
 	ticker := time.NewTicker(1 * time.Second)
 	go func() {
 		for now := range ticker.C {
-			for _, peer := range fd.peers.List() {
+			snap := fd.peers.SnapshotLastSeen() // <<< copia consistente
+			for peer, last := range snap {
 				fd.mu.Lock()
-				// se ho già dichiarato dead, skippo del tutto
 				if fd.suppressed[peer] {
 					fd.mu.Unlock()
 					continue
 				}
-				last, ok := fd.peers.LastSeen[peer]
 				fd.mu.Unlock()
-				if !ok {
-					continue
-				}
 
 				age := now.Sub(last)
 
@@ -92,44 +88,55 @@ func (fd *FailureDetector) Start() {
 
 					if first {
 						log.Printf("Peer %s SUSPICIOUS (no heartbeat for %v)", peer, age)
+
 						rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
 						sr := proto.SuspectRumor{RumorID: rumorID, Peer: peer}
 						out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
 						if err == nil {
-							for _, p := range append(fd.peers.List(), fd.gossip.self) {
-								fd.gossip.SendUDP(out, p)
+							// --- fanout calcolato sui TARGETS (escludendo il sospetto) ---
+							all := fd.peers.List()
+							n := len(all) // peers noti (può includere il sospetto)
+							if n == 0 {
+								log.Printf("[FD] suspect fanout: nessun peer noto (exclude=%s)", peer)
+							} else {
+								// filtra il sospetto
+								filtered := make([]string, 0, n)
+								for _, p := range all {
+									if p != peer {
+										filtered = append(filtered, p)
+									}
+								}
+								m := len(filtered) // targets effettivi (senza il sospetto)
+								if m > 0 {
+									k := int(math.Ceil(math.Log2(float64(m))))
+									if k < 1 {
+										k = 1
+									}
+									if k > m {
+										k = m
+									}
+									targets := randomSubset(filtered, k, fd.gossip.rnd)
+
+									log.Printf("[FD] suspect fanout k=%d n=%d m=%d targets=%v exclude=%s",
+										k, n, m, targets, peer)
+
+									for _, p := range targets {
+										fd.gossip.SendUDP(out, p)
+									}
+								} else {
+									log.Printf("[FD] suspect fanout: nessun target (solo il sospetto era noto) exclude=%s", peer)
+								}
 							}
+
+							// --- self-vote immediato via loopback ---
+							// NB: peers.List() in genere NON contiene self, quindi lo inviamo esplicitamente a noi stessi
+							fd.gossip.SendUDP(out, fd.gossip.self)
 						}
 					}
+
 					continue
 				}
 
-				// 3) fase di DEAD
-				if age > fd.failTimeout {
-					fd.mu.Lock()
-					already := fd.suppressed[peer]
-					if !already {
-						fd.suppressed[peer] = true
-					}
-					fd.mu.Unlock()
-
-					if !already {
-						log.Printf("Peer %s DEAD (no heartbeat for %v)", peer, age)
-						rumorID := fmt.Sprintf("dead|%s|%d", peer, now.UnixNano())
-						dr := proto.DeadRumor{RumorID: rumorID, Peer: peer}
-						out, err := proto.Encode(proto.MsgDead, fd.gossip.self, dr)
-						if err == nil {
-							for _, p := range append(fd.peers.List(), fd.gossip.self) {
-								fd.gossip.SendUDP(out, p)
-							}
-						}
-
-						// rimozione locale
-						fd.peers.Remove(peer)
-						fd.reg.RemoveProvider(peer)
-					}
-					continue
-				}
 			}
 		}
 	}()

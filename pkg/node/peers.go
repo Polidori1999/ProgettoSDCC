@@ -61,3 +61,21 @@ func (pm *PeerManager) List() []string {
 	}
 	return out
 }
+
+// peers.go
+func (pm *PeerManager) GetLastSeen(peer string) (time.Time, bool) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	ts, ok := pm.LastSeen[peer]
+	return ts, ok
+}
+
+func (pm *PeerManager) SnapshotLastSeen() map[string]time.Time {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	cp := make(map[string]time.Time, len(pm.LastSeen))
+	for p, t := range pm.LastSeen {
+		cp[p] = t
+	}
+	return cp
+}
