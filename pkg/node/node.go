@@ -38,6 +38,7 @@ type Node struct {
 	udpConn         *net.UDPConn
 	done            chan struct{}
 	gossipTicker    *time.Ticker
+	shutdownOnce    sync.Once
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -157,37 +158,40 @@ func (pm *PeerManager) AddIfNew(peer string) {
 }
 
 func (n *Node) Shutdown() {
-	select {
-	case <-n.done:
-		return // già in corso / già eseguita
-	default:
-	}
-	log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
+	n.shutdownOnce.Do(func() {
+		log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
 
-	// 1) invia MsgLeave
-	lv := proto.Leave{Peer: n.ID}
-	pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
-	for _, p := range n.PeerMgr.List() {
-		n.GossipM.SendUDP(pkt, p)
-	}
+		// 1) invia MsgLeave
+		lv := proto.Leave{Peer: n.ID}
+		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+		for _, p := range n.PeerMgr.List() {
+			n.GossipM.SendUDP(pkt, p)
+		}
 
-	// 2) dai tempo al pacchetto UDP di partire
-	time.Sleep(500 * time.Millisecond)
+		// 2) dai tempo al pacchetto UDP di partire
+		time.Sleep(500 * time.Millisecond)
 
-	// 3) ferma ticker/goroutine
-	if n.gossipTicker != nil {
-		n.gossipTicker.Stop()
-	}
-	close(n.done)
-	// 4) chiudi socket UDP
-	if n.udpConn != nil {
-		n.udpConn.Close()
-	}
+		// 3) ferma componenti periodiche
+		if n.gossipTicker != nil {
+			n.gossipTicker.Stop()
+		}
+		if n.FailureD != nil { // NEW: ferma il failure detector
+			n.FailureD.Stop()
+		}
 
-	// 5) (opzionale) aspetta un po’ per essere sicuro…
-	time.Sleep(100 * time.Millisecond)
-	log.Printf("← Shutdown completa, exit(0)")
-	os.Exit(0)
+		// 4) segnala a tutte le goroutine di terminare
+		close(n.done)
+
+		// 5) chiudi socket UDP (sblocca ReadFromUDP)
+		if n.udpConn != nil {
+			n.udpConn.Close()
+		}
+
+		// 6) piccola attesa di grazia
+		time.Sleep(100 * time.Millisecond)
+		log.Printf("← Shutdown completa, exit(0)")
+		os.Exit(0)
+	})
 }
 
 // randomSubset estrae fino a n peer a caso da peers
@@ -210,6 +214,7 @@ func (n *Node) Run(lookupSvc string) {
 		<-sigCh
 		n.Shutdown()
 	}()
+
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
 	n.FailureD.Start()
@@ -218,10 +223,15 @@ func (n *Node) Run(lookupSvc string) {
 	go func() {
 		tick := time.NewTicker(10 * time.Second)
 		defer tick.Stop()
-		for range tick.C {
-			peers := n.alivePeers()
-			aliveCount := len(peers) + 1 // +1 = me
-			log.Printf(">> Cluster alive=%d  quorum=%d  peers=%v", aliveCount, n.quorumThreshold, peers)
+		for {
+			select {
+			case <-tick.C:
+				peers := n.alivePeers()
+				aliveCount := len(peers) + 1
+				log.Printf(">> Cluster alive=%d  quorum=%d  peers=%v", aliveCount, n.quorumThreshold, peers)
+			case <-n.done:
+				return
+			}
 		}
 	}()
 
@@ -411,7 +421,7 @@ func (n *Node) Run(lookupSvc string) {
 					}
 					k := 1
 					if len(filtered) > 0 {
-						k := int(math.Ceil(math.Log2(float64(len(filtered)))))
+						k = int(math.Ceil(math.Log2(float64(len(filtered)))))
 						if k < 1 {
 							k = 1
 						}
