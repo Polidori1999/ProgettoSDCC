@@ -39,6 +39,9 @@ type Node struct {
 	done            chan struct{}
 	gossipTicker    *time.Ticker
 	shutdownOnce    sync.Once
+	lastDeadTS      map[string]int64 // peer → TS dell’ultimo DEAD visto
+	lastLeaveTS     map[string]int64 // peer → TS dell’ultimo LEAVE visto
+
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -95,6 +98,8 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		initialSeeds:    seeds,
 		seenLeave:       make(map[string]bool),
 		done:            make(chan struct{}), // globale cosi non lo
+		lastDeadTS:      make(map[string]int64),
+		lastLeaveTS:     make(map[string]int64),
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
@@ -157,14 +162,30 @@ func (pm *PeerManager) AddIfNew(peer string) {
 	}
 }
 
+func (pm *PeerManager) LearnFromPiggyback(peer string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if !pm.Peers[peer] {
+		pm.Peers[peer] = true
+	}
+}
+
 func (n *Node) Shutdown() {
 	n.shutdownOnce.Do(func() {
 		log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
+		//  - generiamo un ID coerente con i Dead: "leave|<peer>|<ts>"
+		rid := fmt.Sprintf("leave|%s|%d|", n.ID, time.Now().UnixNano())
 
 		// 1) invia MsgLeave
-		lv := proto.Leave{Peer: n.ID}
+		lv := proto.Leave{
+			RumorID: rid,
+			Peer:    n.ID,
+		}
 		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
 		for _, p := range n.PeerMgr.List() {
+			if p == n.ID {
+				continue
+			}
 			n.GossipM.SendUDP(pkt, p)
 		}
 
@@ -270,57 +291,65 @@ func (n *Node) Run(lookupSvc string) {
 				switch env.Type {
 
 				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
-
 					var hb proto.Heartbeat
-					if json.Unmarshal(env.Data, &hb) == nil {
-						peer := env.From
-
-						for _, p2 := range hb.Peers {
-							if p2 != n.ID {
-								n.PeerMgr.AddIfNew(p2)
-							}
-						}
-
-						if n.seenLeave[peer] {
-							// era uscito volontariamente, ora sta tornando
-							delete(n.seenLeave, peer)
-							log.Printf("Peer %s RI-ENTRATO (dopo leave)", peer)
-						}
-						// se era già “morto”, pulisco solo il suo stato rumor
-						if n.suspectCount[peer] > 0 || hasDeadRumorsFor(peer, n.seenDead) {
-							// cancello tutti i suspectID di quel peer
-							for id := range n.seenSuspect {
-								if strings.HasPrefix(id, "suspect|"+peer+"|") {
-									delete(n.seenSuspect, id)
-								}
-							}
-							// cancello tutti i deadID di quel peer
-							for id := range n.seenDead {
-								if strings.HasPrefix(id, "dead|"+peer+"|") {
-									delete(n.seenDead, id)
-								}
-							}
-
-							n.suspectCount[peer] = 0
-							// ← AGGIUNTO: tolgo il flag "già gestito dead"
-							delete(n.handledDead, peer)
-							// ← AGGIUNTO: riattivo il suo failure-detector
-							n.FailureD.UnsuppressPeer(peer)
-							log.Printf("Peer %s RI-ENTRATO: resetto failure-detector", peer)
-
-						}
-						n.PeerMgr.Add(peer)
-						n.updateQuorum()
-						n.PeerMgr.Seen(peer)
-						n.Registry.Update(peer, hb.Services)
-						log.Printf(
-							"HB from %-12s services=%v digest=%s peers=%v",
-							peer,
-							hb.Services,
-							hb.Digest,
-							hb.Peers, // <<< ora vediamo il tuo piggy-back
-						)
+					if json.Unmarshal(env.Data, &hb) != nil {
+						break
 					}
+					peer := env.From
+
+					// (A) Guardia tombstone
+					n.rumorMu.RLock()
+					tsDead, hadDead := n.lastDeadTS[peer]
+					n.rumorMu.RUnlock()
+					if hadDead && env.TS <= tsDead {
+						// HB partito prima del DEAD ma arrivato dopo → ignora tutto, anche piggyback
+						break
+					}
+					if hadDead && env.TS > tsDead {
+						// rientro → pulizia UNA sola volta
+						n.rumorMu.Lock()
+						delete(n.lastDeadTS, peer)
+						delete(n.handledDead, peer)
+						for id := range n.seenSuspect {
+							if strings.HasPrefix(id, "suspect|"+peer+"|") {
+								delete(n.seenSuspect, id)
+							}
+						}
+						for id := range n.seenDead {
+							if strings.HasPrefix(id, "dead|"+peer+"|") {
+								delete(n.seenDead, id)
+							}
+						}
+						n.suspectCount[peer] = 0
+						// leave cleanup se servisse
+						delete(n.seenLeave, peer)
+						n.rumorMu.Unlock()
+
+						n.FailureD.UnsuppressPeer(peer)
+						log.Printf("Peer %s RI-ENTRATO (dopo DEAD)", peer)
+					}
+
+					// (B) Piggyback: non toccare LastSeen, non reimportare tombstoned/left
+					for _, p2 := range hb.Peers {
+						if p2 == n.ID {
+							continue
+						}
+						n.rumorMu.RLock()
+						tomb := n.handledDead[p2] || n.seenLeave[p2]
+						n.rumorMu.RUnlock()
+						if !tomb {
+							n.PeerMgr.LearnFromPiggyback(p2)
+						}
+					}
+
+					// (C) Aggiorna vista locale
+					n.PeerMgr.Add(peer)
+					n.PeerMgr.Seen(peer)
+					n.updateQuorum()
+					n.Registry.Update(peer, hb.Services)
+
+					log.Printf("HB from %-12s services=%v digest=%s peers=%v",
+						peer, hb.Services, hb.Digest, hb.Peers)
 
 				case proto.MsgRumor:
 					// TODO: rumor handling
@@ -436,12 +465,14 @@ func (n *Node) Run(lookupSvc string) {
 						n.handledDead[r.Peer] = true
 						log.Printf("Peer %s DEAD (quorum %d raggiunto)", r.Peer, n.quorumThreshold)
 
+						tsNow := time.Now().UnixNano()
 						d := proto.DeadRumor{
-							RumorID: fmt.Sprintf("dead|%s|%d", r.Peer, time.Now().UnixNano()),
+							RumorID: fmt.Sprintf("dead|%s|%d", r.Peer, tsNow),
 							Peer:    r.Peer,
 						}
 						n.rumorMu.Lock()
 						n.seenDead[d.RumorID] = true
+						n.lastDeadTS[r.Peer] = tsNow // ← tombstone locale
 						n.rumorMu.Unlock()
 
 						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
@@ -479,6 +510,8 @@ func (n *Node) Run(lookupSvc string) {
 						break
 					}
 
+					n.lastDeadTS[d.Peer] = env.TS // ← tombstone dal rumor ricevuto
+
 					n.seenDead[d.RumorID] = true // marchiamo il rumor
 					n.handledDead[d.Peer] = true // blocchiamo ogni futuro Dead/Suspect
 					n.rumorMu.Unlock()
@@ -512,6 +545,18 @@ func (n *Node) Run(lookupSvc string) {
 					}
 					peer := lv.Peer
 
+					rid := lv.RumorID
+					if rid == "" {
+						rid = fmt.Sprintf("leave|%s|%d|", peer, env.TS)
+					}
+
+					//leave tardivo
+					tsRumor := time.Unix(0, env.TS)
+					if last, ok := n.PeerMgr.GetLastSeen(peer); ok && last.After(tsRumor) {
+						log.Printf("ignoro LEAVE tardivov su %s: rumorTs=%v < lastSeen=%v", peer, tsRumor, last)
+						break
+					}
+
 					// sezione critica ------------------------------------------------
 					n.rumorMu.Lock()
 					if n.seenLeave[peer] { // già visto
@@ -519,20 +564,23 @@ func (n *Node) Run(lookupSvc string) {
 						break
 					}
 					n.seenLeave[peer] = true // marchio il leave
-					n.rumorMu.Unlock()       // fine sezione critica
+					n.lastLeaveTS[peer] = env.TS
+					n.rumorMu.Unlock() // fine sezione critica
 					// ----------------------------------------------------------------
 
-					log.Printf("Peer %s → LEFT voluntarily", peer)
+					log.Printf("Peer %s → LEFT voluntarily RID=%s", peer, rid)
 
+					fwd := lv
+					fwd.RumorID = rid
 					// gossip leggero
 					alive := n.alivePeers() // include solo i peer ancora up
 					k := int(math.Ceil(math.Log2(float64(len(alive)))))
 					if k < 1 {
 						k = 1
 					}
-					raw, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
+					raw, _ := proto.Encode(proto.MsgLeave, n.ID, fwd)
 					for _, p := range randomSubset(alive, k, n.GossipM.rnd) {
-						if p == env.From { // evito rinvio al mittente
+						if p == env.From || p == peer { // evito rinvio al mittente
 							continue
 						}
 						n.GossipM.SendUDP(raw, p)
@@ -553,15 +601,31 @@ func (n *Node) Run(lookupSvc string) {
 	if lookupSvc != "" {
 		const wait = 4 * time.Second // tempo massimo di attesa
 		deadline := time.Now().Add(wait)
+
+		lm.Lookup(lookupSvc, DefaultLookupTTL)
+		resend := time.NewTimer(1 * time.Second)
+		check := time.NewTicker(300 * time.Millisecond)
+		defer resend.Stop()
+		defer check.Stop()
+
 		for time.Now().Before(deadline) {
-			if p, ok := n.Registry.Lookup(lookupSvc); ok {
-				fmt.Printf("Service %s → %s\n", lookupSvc, p)
-				n.Shutdown()
+			select {
+			case <-check.C:
+				if p, ok := n.Registry.Lookup(lookupSvc); ok {
+					fmt.Printf("Service %s -> %s\n", lookupSvc, p)
+					n.Shutdown()
+					return
+				}
+
+			case <-resend.C:
+				lm.Lookup(lookupSvc, DefaultLookupTTL)
+
+			case <-n.done:
 				return
+
 			}
-			time.Sleep(200 * time.Millisecond)
 		}
-		fmt.Printf("Service %s NOT found (timeout)\n", lookupSvc)
+		fmt.Printf("service %s not fount (timeout)\n", lookupSvc)
 		n.Shutdown()
 		return
 	}

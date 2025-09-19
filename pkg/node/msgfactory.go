@@ -6,7 +6,7 @@ import (
 	"ProgettoSDCC/pkg/proto"
 )
 
-// MakeHeartbeatWithDigest costruisce un heartbeat con digest usando la nuova API di proto.Encode.
+// MakeHeartbeatWitigest costruisce un heartbeat con digest usando la nuova API di proto.Encode.
 func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string, peers []string) []byte {
 
 	// raccogli servizi locali
@@ -29,7 +29,7 @@ func MakeHeartbeatWithDigest(reg *ServiceRegistry, fromID string, digest string,
 	return out
 }
 
-// MakeHeartbeat costruisce un heartbeat “normale” (senza digest esplicito).
+// MakeHeartbt costruisce un heartbeat “normale” (senza digest esplicito).
 func MakeHeartbeat(reg *ServiceRegistry, fromID string, peers []string) []byte {
 	svcs := make([]string, 0, len(reg.Table))
 	for s := range reg.Table {

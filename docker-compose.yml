@@ -74,16 +74,18 @@ services:
     ports:
       - "9005:9005/udp"
 
-  lookup:
+  client:
     build: .
-    container_name: lookup
+    container_name: client                 # ← prima era "lookup"
     stop_signal: SIGTERM
-    depends_on: [registry, node1, node2, node3]
+    depends_on: [registry, node1, node2, node3, node4, node5]
     entrypoint: ["gossip-node"]
     command:
-      - "--id=client:9009"
+      - "--id=client:9009"                 # ← host "client" = nome container
       - "--port=9009"
-      - "--registry=registry:9000"
-      - "--lookup=orders"
-      - "--ttl=3"
-      - "--fanout=2"
+      - "--registry=registry:9000"         # introducer unicamente per bootstrap
+      - "--lookup=orders"                  # il servizio che cerchi
+      - "--ttl=3"                          # TTL della ricerca
+    ports:
+      - "9009:9009/udp"
+

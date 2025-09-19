@@ -44,8 +44,10 @@ type Heartbeat struct {
 	Peers    []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
 }
 type Leave struct {
-	Peer string `json:"peer"`
+	RumorID string `json:"rumorID"` // ID univoco del rumor di leave (serve per F>1)
+	Peer    string `json:"peer"`    // chi sta lasciando
 }
+
 type Rumor struct {
 	RumorID string `json:"id"`
 	Payload []byte `json:"payload"`
