@@ -83,6 +83,13 @@ func main() {
 	lookupFlag := flag.String("lookup", "", "service lookup then exit")
 	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")    // (al momento non usato da Node.Run)
 	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
+
+	// >>> nuovi flag per i parametri RPC
+	rpcAFlag := flag.Float64("rpc-a", 18, "Parametro A per l'RPC (float64)")
+	rpcBFlag := flag.Float64("rpc-b", 3, "Parametro B per l'RPC (float64)")
+
+	svcCtrlFlag := flag.String("svc-ctrl", "", "file di controllo servizi (comandi: 'ADD <svc>' / 'DEL <svc>')")
+
 	_ = ttlFlag
 	_ = fanoutFlag
 	flag.Parse()
@@ -110,6 +117,12 @@ func main() {
 	// >>> Unico code path: crea il nodo e fai partire Run
 	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
 
+	n.SetRPCParams(*rpcAFlag, *rpcBFlag)
+
+	if *svcCtrlFlag != "" {
+		go watchSvcControlFile(n, *svcCtrlFlag)
+	}
+
 	if *lookupFlag != "" {
 		log.Printf("[MODE] client lookup=%s", *lookupFlag)
 		n.Run(*lookupFlag) // ← QUI fa: lm.Lookup + attesa risposta + shutdown su successo/timeout
@@ -117,4 +130,57 @@ func main() {
 	}
 
 	n.Run("") // nodo normale
+}
+
+// Commenti in italiano: osserva un file e applica comandi "ADD <svc>" / "DEL <svc>".
+// Semplice polling: appendi righe al file montato nel container.
+func watchSvcControlFile(n *node.Node, path string) {
+	// assicurati che il file esista
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0644)
+	if err != nil {
+		log.Printf("[SVCC] errore apertura %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+
+	// log d’avvio
+	log.Printf("[SVCC] watching %s (comandi: ADD <svc> | DEL <svc>)", path)
+
+	// posizionati alla fine: processa solo comandi nuovi
+	if _, err := f.Seek(0, os.SEEK_END); err != nil {
+		log.Printf("[SVCC] seek end fallito: %v", err)
+	}
+
+	for {
+		r := bufio.NewReader(f)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				break // niente nuove righe al momento
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				log.Printf("[SVCC] comando non valido: %q", line)
+				continue
+			}
+			cmd := strings.ToUpper(fields[0])
+			svc := fields[1]
+
+			switch cmd {
+			case "ADD":
+				n.AddService(svc)
+				log.Printf("[SVCC] ADD %s", svc)
+			case "DEL":
+				n.RemoveService(svc)
+				log.Printf("[SVCC] DEL %s", svc)
+			default:
+				log.Printf("[SVCC] comando sconosciuto: %q", line)
+			}
+		}
+		time.Sleep(300 * time.Millisecond) // piccolo polling
+	}
 }

@@ -129,3 +129,7 @@ func (gm *GossipManager) SendUDP(data []byte, peerAddr string) {
 	conn.Write(data)
 	conn.Close()
 }
+func (gm *GossipManager) TriggerHeartbeatFullNow() {
+
+	gm.sendFullHB()
+}

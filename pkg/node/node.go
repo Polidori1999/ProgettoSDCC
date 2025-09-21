@@ -41,6 +41,15 @@ type Node struct {
 	lastDeadTS      map[string]int64 // peer → TS dell’ultimo DEAD visto
 	lastLeaveTS     map[string]int64 // peer → TS dell’ultimo LEAVE visto
 
+	//track connessione tcp
+	rpcLn    net.Listener
+	rpcMu    sync.Mutex
+	rpcConns map[net.Conn]struct{}
+	rpcWG    sync.WaitGroup
+
+	//parametri servizi
+	rpcA float64 // parametro A per l'RPC
+	rpcB float64 // parametro B per l'RPC
 }
 
 func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
@@ -100,10 +109,27 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		done:            make(chan struct{}), // globale cosi non lo
 		lastDeadTS:      make(map[string]int64),
 		lastLeaveTS:     make(map[string]int64),
+		rpcConns:        make(map[net.Conn]struct{}),
+		rpcA:            18, // default sensati, sovrascrivibili dal main
+		rpcB:            3,
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
 	return n
+}
+
+// dentro node.go
+func (n *Node) AddService(svc string) {
+	if n.Registry.AddLocalService(n.ID, svc) {
+		n.GossipM.TriggerHeartbeatFullNow()
+		log.Printf("[SR] add local service=%q → gossip full now", svc)
+	}
+}
+func (n *Node) RemoveService(svc string) {
+	if n.Registry.RemoveLocalService(n.ID, svc) {
+		n.GossipM.TriggerHeartbeatFullNow()
+		log.Printf("[SR] remove local service=%q → gossip full now", svc)
+	}
 }
 
 // conta i peer "alive" basandosi su LastSeen entro failTimeout
@@ -170,9 +196,15 @@ func (pm *PeerManager) LearnFromPiggyback(peer string) {
 	}
 }
 
+// SetRPCParams imposta i parametri A e B usati nelle invocazioni RPC
+func (n *Node) SetRPCParams(a, b float64) {
+	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
+	n.rpcA = a
+	n.rpcB = b
+}
+
 func (n *Node) Shutdown() {
 	n.shutdownOnce.Do(func() {
-		// 1) Annuncia il Leave (best-effort) con un piccolo delay per l'invio UDP
 		log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
 		rid := fmt.Sprintf("leave|%s|%d|", n.ID, time.Now().UnixNano())
 		lv := proto.Leave{RumorID: rid, Peer: n.ID}
@@ -182,30 +214,48 @@ func (n *Node) Shutdown() {
 					n.GossipM.SendUDP(pkt, p)
 				}
 			}
-			time.Sleep(500 * time.Millisecond) // dai tempo al pacchetto di partire
+			time.Sleep(500 * time.Millisecond)
 		}
 
-		// 2) Ferma componenti periodiche (Gossip + FailureDetector)
+		// Ferma componenti periodiche
 		if n.GossipM != nil {
-			n.GossipM.Stop() // ← fondamentale: ferma i ticker/goroutine del gossip
+			n.GossipM.Stop()
 		}
 		if n.FailureD != nil {
 			n.FailureD.Stop()
 		}
-		if n.gossipTicker != nil { // se rimane da versioni precedenti
+		if n.gossipTicker != nil {
 			n.gossipTicker.Stop()
 		}
 
-		// 3) Segnala il termine a tutte le goroutine e chiudi le socket
-		close(n.done) // sblocca i select <-n.done
+		// Segnala done
+		close(n.done)
+
+		// Chiudi UDP per sbloccare i reader
 		if n.udpConn != nil {
-			_ = n.udpConn.Close() // sblocca ReadFromUDP con errore e fa uscire i reader
+			_ = n.udpConn.Close()
 		}
 
-		// 4) Piccola attesa di grazia e log finale
+		// === NUOVO: chiudi TCP listener e connessioni attive ===
+		if n.rpcLn != nil {
+			_ = n.rpcLn.Close() // sblocca Accept
+		}
+		n.rpcMu.Lock()
+		for c := range n.rpcConns {
+			_ = c.Close() // sveglia handler bloccati
+		}
+		n.rpcMu.Unlock()
+		// aspetta gli handler (con piccolo timeout)
+		doneRPC := make(chan struct{})
+		go func() { n.rpcWG.Wait(); close(doneRPC) }()
+		select {
+		case <-doneRPC:
+		case <-time.After(500 * time.Millisecond):
+			log.Printf("[RPC] timeout nel wait; proseguo lo shutdown")
+		}
+
 		time.Sleep(100 * time.Millisecond)
 		log.Printf("← Shutdown completato")
-		// NIENTE os.Exit(0): lascia che Run/il main ritornino in modo naturale
 	})
 }
 
@@ -233,6 +283,10 @@ func (n *Node) Run(lookupSvc string) {
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
 	n.FailureD.Start()
+	// avvia RPC TCP se ho servizi locali
+	if ls := n.Registry.LocalServices(); len(ls) > 0 {
+		go n.serveArithmeticTCP(fmt.Sprintf(":%d", n.Port))
+	}
 
 	// 1.b) Log periodico dello stato cluster/quorum
 	go func() {
@@ -654,7 +708,7 @@ func (n *Node) Run(lookupSvc string) {
 		const wait = 6 * time.Second // finestra un po' più larga
 		deadline := time.Now().Add(wait)
 
-		// (opzionale) piccolo warm-up per far girare un giro di HB
+		// piccolo warm-up per far girare un giro di HB
 		time.Sleep(1200 * time.Millisecond)
 
 		// retry ogni secondo finché non scade la deadline
@@ -671,6 +725,18 @@ func (n *Node) Run(lookupSvc string) {
 			case <-check.C:
 				if p, ok := n.Registry.Lookup(lookupSvc); ok {
 					fmt.Printf("Service %s → %s\n", lookupSvc, p)
+
+					// --- QUI: chiamata RPC di prova (modifica A,B a piacere) ---
+					resp, err := rpcCall(p, lookupSvc, n.rpcA, n.rpcB)
+					if err != nil {
+						fmt.Printf("invoke error: %v\n", err)
+					} else if !resp.OK {
+						fmt.Printf("invoke error: %s\n", resp.Error)
+					} else {
+						fmt.Printf("result: %g\n", resp.Result)
+					}
+
+					// chiudi ordinatamente
 					n.Shutdown()
 					return
 				}

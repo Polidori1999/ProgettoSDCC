@@ -83,3 +83,10 @@ done
 
 sudo aa-remove-unknown        # pulisce i profili zombie
 sudo systemctl restart docker
+
+
+
+aggiungere o rimuovere servizi
+
+docker exec node2 sh -c 'echo "ADD sum" >> /tmp/services.ctrl'
+ ocker exec node2 sh -c 'echo "DEL sub" >> /tmp/services.ctrl'

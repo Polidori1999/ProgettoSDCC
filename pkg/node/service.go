@@ -13,6 +13,7 @@ import (
 // - Tabella: service → provider → lastSeen
 // - mu: protezione concorrenza (HB, lookup, anti-entropy possono arrivare insieme)
 // ───────────────────────────────────────────────────────────────────────────────
+
 type ServiceRegistry struct {
 	mu            sync.RWMutex
 	Table         map[string]map[string]time.Time
@@ -25,6 +26,20 @@ func NewServiceRegistry() *ServiceRegistry {
 	}
 }
 
+// normalizza il nome del servizio
+func normSvc(s string) string {
+	return strings.TrimSpace(strings.ToLower(s))
+}
+
+// ritorna l'indice del servizio nella slice, -1 se non presente
+func findSvc(ss []string, svc string) int {
+	for i, x := range ss {
+		if x == svc {
+			return i
+		}
+	}
+	return -1
+}
 func (sr *ServiceRegistry) AddLocal(selfID, svcCSV string) {
 	now := time.Now()
 
@@ -147,4 +162,67 @@ func (sr *ServiceRegistry) ApplyDelta(delta map[string][]string) {
 			}
 		}
 	}
+}
+
+// AddLocalService aggiunge un servizio locale (selfID = id del nodo).
+// Ritorna true se ha cambiato lo stato (nuovo servizio), false se già presente.
+func (sr *ServiceRegistry) AddLocalService(selfID, svc string) bool {
+	svc = normSvc(svc)
+	if svc == "" || !proto.IsValidService(svc) {
+		return false
+	}
+	now := time.Now()
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	if findSvc(sr.localServices, svc) >= 0 {
+		// già presente: aggiorno solo lastSeen in Table per robustezza
+		if sr.Table[svc] == nil {
+			sr.Table[svc] = make(map[string]time.Time)
+		}
+		sr.Table[svc][selfID] = now
+		return false
+	}
+
+	// aggiungi al locale
+	sr.localServices = append(sr.localServices, svc)
+
+	// e alla tabella globale service->providers
+	if sr.Table[svc] == nil {
+		sr.Table[svc] = make(map[string]time.Time)
+	}
+	sr.Table[svc][selfID] = now
+	return true
+}
+
+// RemoveLocalService rimuove un servizio locale (selfID = id del nodo).
+// Ritorna true se ha cambiato lo stato (era presente), false se era già assente.
+func (sr *ServiceRegistry) RemoveLocalService(selfID, svc string) bool {
+	svc = normSvc(svc)
+	if svc == "" {
+		return false
+	}
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+
+	idx := findSvc(sr.localServices, svc)
+	if idx < 0 {
+		return false
+	}
+
+	// rimuovi dallo slice locale (swap con ultimo per O(1))
+	last := len(sr.localServices) - 1
+	sr.localServices[idx], sr.localServices[last] = sr.localServices[last], sr.localServices[idx]
+	sr.localServices = sr.localServices[:last]
+
+	// rimuovi SOLO il provider locale dalla tabella
+	if provs, ok := sr.Table[svc]; ok {
+		delete(provs, selfID)
+		if len(provs) == 0 {
+			delete(sr.Table, svc)
+		}
+	}
+	return true
 }
