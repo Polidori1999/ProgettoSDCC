@@ -17,7 +17,7 @@ services:
       - "--id=node1:9001"
       - "--port=9001"
       - "--registry=registry:9000"
-      - "--services=auth"
+      - "--services="
     ports:
       - "9001:9001/udp"
 
@@ -31,7 +31,7 @@ services:
       - "--id=node2:9002"
       - "--port=9002"
       - "--registry=registry:9000"
-      - "--services=orders"
+      - "--services=sub"
     ports:
       - "9002:9002/udp"
 
@@ -44,7 +44,7 @@ services:
       - "--id=node3:9003"
       - "--port=9003"
       - "--registry=registry:9000"
-      - "--services=payments"
+      - "--services=div"
     ports:
       - "9003:9003/udp"
 
@@ -57,7 +57,7 @@ services:
       - "--id=node4:9004"
       - "--port=9004"
       - "--registry=registry:9000"
-      - "--services=svc"
+      - "--services=mul"
     ports:
       - "9004:9004/udp"
 
@@ -70,7 +70,7 @@ services:
       - "--id=node5:9005"
       - "--port=9005"
       - "--registry=registry:9000"
-      - "--services=svc"
+      - "--services=sum"
     ports:
       - "9005:9005/udp"
 
@@ -84,7 +84,7 @@ services:
       - "--id=client:9009"                 # ← host "client" = nome container
       - "--port=9009"
       - "--registry=registry:9000"         # introducer unicamente per bootstrap
-      - "--lookup=orders"                  # il servizio che cerchi
+      - "--lookup=sub"                  # il servizio che cerchi
       - "--ttl=3"                          # TTL della ricerca
     ports:
       - "9009:9009/udp"

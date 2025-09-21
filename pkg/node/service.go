@@ -1,6 +1,7 @@
 package node
 
 import (
+	"ProgettoSDCC/pkg/proto"
 	"math/rand"
 	"strings"
 	"sync"
@@ -33,8 +34,14 @@ func (sr *ServiceRegistry) AddLocal(selfID, svcCSV string) {
 	// resettiamo la slice ogni volta (nel caso venisse richiamata più volte)
 	sr.localServices = nil
 
-	for _, s := range strings.Split(svcCSV, ",") {
-		if s = strings.TrimSpace(s); s == "" {
+	for _, raw := range strings.Split(svcCSV, ",") {
+		s := strings.TrimSpace(strings.ToLower(raw))
+		if s == "" {
+			continue
+		}
+		if !proto.IsValidService(s) {
+			// Non inserire servizi sconosciuti
+			// log.Printf("[WARN] servizio non valido: %q (ignorato)", s)
 			continue
 		}
 		if sr.Table[s] == nil {

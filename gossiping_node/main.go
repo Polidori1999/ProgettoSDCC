@@ -5,14 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"strings"
 	"time"
 
 	"ProgettoSDCC/pkg/node"
-	"ProgettoSDCC/pkg/proto"
 )
 
 // fetchRegistryPeers contatta il registry e restituisce i peer
@@ -53,6 +51,8 @@ func fetchRegistryPeers(regAddr, myID string) []string {
 
 		// 3) Parsing
 		parts := strings.Split(reply, "#")
+		log.Printf("[BUILD] marker A %s", time.Now().Format(time.RFC3339Nano))
+
 		var peers []string
 		for _, p := range parts[1:] {
 			kv := strings.SplitN(p, "/", 2)
@@ -81,8 +81,10 @@ func main() {
 	svcFlag := flag.String("services", "", "comma-separated services")
 	registryFlag := flag.String("registry", "", "host:port del service registry")
 	lookupFlag := flag.String("lookup", "", "service lookup then exit")
-	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")
-	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup")
+	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")    // (al momento non usato da Node.Run)
+	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
+	_ = ttlFlag
+	_ = fanoutFlag
 	flag.Parse()
 
 	if *idFlag == "" {
@@ -90,80 +92,29 @@ func main() {
 		*idFlag = fmt.Sprintf("%s:%d", h, *portFlag)
 	}
 
+	// Bootstrap via registry (se presente)
 	var peerList []string
-	if *lookupFlag != "" && *registryFlag != "" {
-		log.Printf("[INFO] Lookup mode: bootstrap dal registry %s", *registryFlag)
-		peerList = fetchRegistryPeers(*registryFlag, *idFlag)
-	} else if *registryFlag != "" {
-
-		log.Printf("[DBG] Bootstrapping dal registry %s…", *registryFlag)
+	if *registryFlag != "" {
+		if *lookupFlag != "" {
+			log.Printf("[INFO] Lookup mode: bootstrap dal registry %s", *registryFlag)
+		} else {
+			log.Printf("[DBG] Bootstrapping dal registry %s…", *registryFlag)
+		}
 		peerList = fetchRegistryPeers(*registryFlag, *idFlag)
 		log.Printf("[DBG] Peer iniziali dal registry: %v", peerList)
 		if len(peerList) == 0 {
-			log.Fatalf("Nessun peer restituito dal registry")
+			log.Printf("[WARN] Nessun peer restituito dal registry (continuo comunque)")
 		}
 	}
+
+	// >>> Unico code path: crea il nodo e fai partire Run
+	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
 
 	if *lookupFlag != "" {
-		doReactiveLookup(*lookupFlag, *idFlag, peerList, *portFlag, *ttlFlag, *fanoutFlag)
-		return
-	}
-	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag) //node
-
-	n.Run("")
-}
-
-// randomSubset estrae fino a n peer a caso da peers
-func randomSubset(peers []string, n int) []string {
-	if len(peers) <= n {
-		return peers
-	}
-	out := make([]string, len(peers))
-	copy(out, peers)
-	for i := 0; i < n; i++ {
-		j := i + rand.Intn(len(out)-i)
-		out[i], out[j] = out[j], out[i]
-	}
-	return out[:n]
-}
-
-// doReactiveLookup invia una richiesta on-demand e attende la risposta
-func doReactiveLookup(service, selfID string, peers []string, port, ttl, fanout int) {
-	laddr := &net.UDPAddr{Port: port, IP: net.IPv4zero}
-	conn, err := net.ListenUDP("udp", laddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "lookup listen error: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	reqID := fmt.Sprintf("%d", time.Now().UnixNano())
-	lr := proto.LookupRequest{ID: reqID, Service: service, Origin: selfID, TTL: ttl}
-	data, err := proto.Encode(proto.MsgLookup, selfID, lr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "encode lookup error: %v\n", err)
+		log.Printf("[MODE] client lookup=%s", *lookupFlag)
+		n.Run(*lookupFlag) // ← QUI fa: lm.Lookup + attesa risposta + shutdown su successo/timeout
 		return
 	}
 
-	for _, p := range randomSubset(peers, fanout) {
-		addr, _ := net.ResolveUDPAddr("udp", p)
-		conn.WriteToUDP(data, addr)
-	}
-
-	buf := make([]byte, 4096)
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	nRead, _, err := conn.ReadFromUDP(buf)
-	if err != nil {
-		fmt.Printf("Service %s NOT found\n", service)
-		return
-	}
-	env, _ := proto.Decode(buf[:nRead])
-	if env.Type == proto.MsgLookupResponse {
-		resp, _ := proto.DecodeLookupResponse(env.Data)
-		if resp.ID == reqID {
-			fmt.Printf("Service %s → %s\n", service, resp.Provider)
-			return
-		}
-	}
-	fmt.Printf("Service %s NOT found\n", service)
+	n.Run("") // nodo normale
 }

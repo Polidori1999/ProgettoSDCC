@@ -16,6 +16,10 @@ type GossipManager struct {
 
 	// rnd è il generatore casuale locale
 	rnd *rand.Rand
+	// NEW
+	stopCh chan struct{}
+	lightT *time.Ticker
+	fullT  *time.Ticker
 }
 
 // NewGossipManager ora riceve un generatore *rand.Rand
@@ -30,33 +34,33 @@ func NewGossipManager(pm *PeerManager, dm *DigestManager, reg *ServiceRegistry, 
 }
 
 func (gm *GossipManager) Start() {
+	if gm.stopCh != nil {
+		return
+	} // già avviato
+	gm.stopCh = make(chan struct{})
+	gm.lightT = time.NewTicker(2 * time.Second)
+	gm.fullT = time.NewTicker(15 * time.Second)
 
-	lightTick := time.NewTicker(2 * time.Second) // HB “digest”
-	fullTick := time.NewTicker(15 * time.Second) // HB completo
-
-	go func() {
+	go func(stop <-chan struct{}) {
+		defer func() {
+			if gm.lightT != nil {
+				gm.lightT.Stop()
+			}
+			if gm.fullT != nil {
+				gm.fullT.Stop()
+			}
+		}()
 		for {
 			select {
-			case <-lightTick.C:
+			case <-stop:
+				return
+			case <-gm.lightT.C:
 				gm.sendLightHB()
-			case <-fullTick.C:
+			case <-gm.fullT.C:
 				gm.sendFullHB()
 			}
 		}
-	}()
-	//da inserire
-	/*go func() {
-	    for {
-	        time.Sleep(2*time.Second + time.Duration(gm.rnd.Intn(400)-200)*time.Millisecond)
-	        gm.sendLightHB()
-	    }
-	}()
-	go func() {
-	    for {
-	        time.Sleep(15*time.Second + time.Duration(gm.rnd.Intn(1500)-750)*time.Millisecond)
-	        gm.sendFullHB()
-	    }
-	}()*/
+	}(gm.stopCh)
 }
 
 func (gm *GossipManager) sendLightHB() {
@@ -66,6 +70,21 @@ func (gm *GossipManager) sendLightHB() {
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeatDigest, gm.self, hb)
 	gm.fanout(pkt)
+}
+
+func (gm *GossipManager) Stop() {
+	if gm.stopCh != nil {
+		close(gm.stopCh)
+		gm.stopCh = nil
+	}
+	if gm.lightT != nil {
+		gm.lightT.Stop()
+		gm.lightT = nil
+	}
+	if gm.fullT != nil {
+		gm.fullT.Stop()
+		gm.fullT = nil
+	}
 }
 
 func (gm *GossipManager) sendFullHB() {

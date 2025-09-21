@@ -2,7 +2,6 @@ package node
 
 import (
 	"ProgettoSDCC/pkg/proto"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -69,6 +68,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	pm := NewPeerManager(seeds, id)
 	reg := NewServiceRegistry()
 	reg.AddLocal(id, svcCSV)
+	log.Printf("[BOOT] %s local services: %v", id, reg.LocalServices())
 
 	dm := NewDigestManager()
 
@@ -172,46 +172,40 @@ func (pm *PeerManager) LearnFromPiggyback(peer string) {
 
 func (n *Node) Shutdown() {
 	n.shutdownOnce.Do(func() {
+		// 1) Annuncia il Leave (best-effort) con un piccolo delay per l'invio UDP
 		log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
-		//  - generiamo un ID coerente con i Dead: "leave|<peer>|<ts>"
 		rid := fmt.Sprintf("leave|%s|%d|", n.ID, time.Now().UnixNano())
-
-		// 1) invia MsgLeave
-		lv := proto.Leave{
-			RumorID: rid,
-			Peer:    n.ID,
-		}
-		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
-		for _, p := range n.PeerMgr.List() {
-			if p == n.ID {
-				continue
+		lv := proto.Leave{RumorID: rid, Peer: n.ID}
+		if pkt, err := proto.Encode(proto.MsgLeave, n.ID, lv); err == nil {
+			for _, p := range n.PeerMgr.List() {
+				if p != n.ID {
+					n.GossipM.SendUDP(pkt, p)
+				}
 			}
-			n.GossipM.SendUDP(pkt, p)
+			time.Sleep(500 * time.Millisecond) // dai tempo al pacchetto di partire
 		}
 
-		// 2) dai tempo al pacchetto UDP di partire
-		time.Sleep(500 * time.Millisecond)
-
-		// 3) ferma componenti periodiche
-		if n.gossipTicker != nil {
-			n.gossipTicker.Stop()
+		// 2) Ferma componenti periodiche (Gossip + FailureDetector)
+		if n.GossipM != nil {
+			n.GossipM.Stop() // ← fondamentale: ferma i ticker/goroutine del gossip
 		}
-		if n.FailureD != nil { // NEW: ferma il failure detector
+		if n.FailureD != nil {
 			n.FailureD.Stop()
 		}
-
-		// 4) segnala a tutte le goroutine di terminare
-		close(n.done)
-
-		// 5) chiudi socket UDP (sblocca ReadFromUDP)
-		if n.udpConn != nil {
-			n.udpConn.Close()
+		if n.gossipTicker != nil { // se rimane da versioni precedenti
+			n.gossipTicker.Stop()
 		}
 
-		// 6) piccola attesa di grazia
+		// 3) Segnala il termine a tutte le goroutine e chiudi le socket
+		close(n.done) // sblocca i select <-n.done
+		if n.udpConn != nil {
+			_ = n.udpConn.Close() // sblocca ReadFromUDP con errore e fa uscire i reader
+		}
+
+		// 4) Piccola attesa di grazia e log finale
 		time.Sleep(100 * time.Millisecond)
-		log.Printf("← Shutdown completa, exit(0)")
-		os.Exit(0)
+		log.Printf("← Shutdown completato")
+		// NIENTE os.Exit(0): lascia che Run/il main ritornino in modo naturale
 	})
 }
 
@@ -290,23 +284,21 @@ func (n *Node) Run(lookupSvc string) {
 
 				switch env.Type {
 
-				case proto.MsgHeartbeat, proto.MsgHeartbeatDigest:
-					var hb proto.Heartbeat
-					if json.Unmarshal(env.Data, &hb) != nil {
+				case proto.MsgHeartbeatDigest:
+					hbd, err := proto.DecodeHeartbeatDigest(env.Data)
+					if err != nil {
 						break
 					}
 					peer := env.From
 
-					// (A) Guardia tombstone
+					// guardia tombstone (come già fai)...
 					n.rumorMu.RLock()
 					tsDead, hadDead := n.lastDeadTS[peer]
 					n.rumorMu.RUnlock()
 					if hadDead && env.TS <= tsDead {
-						// HB partito prima del DEAD ma arrivato dopo → ignora tutto, anche piggyback
 						break
 					}
 					if hadDead && env.TS > tsDead {
-						// rientro → pulizia UNA sola volta
 						n.rumorMu.Lock()
 						delete(n.lastDeadTS, peer)
 						delete(n.handledDead, peer)
@@ -321,15 +313,67 @@ func (n *Node) Run(lookupSvc string) {
 							}
 						}
 						n.suspectCount[peer] = 0
-						// leave cleanup se servisse
 						delete(n.seenLeave, peer)
 						n.rumorMu.Unlock()
-
 						n.FailureD.UnsuppressPeer(peer)
 						log.Printf("Peer %s RI-ENTRATO (dopo DEAD)", peer)
 					}
 
-					// (B) Piggyback: non toccare LastSeen, non reimportare tombstoned/left
+					// piggyback peers (non reimportare tombstoned/left)
+					for _, p2 := range hbd.Peers {
+						if p2 == n.ID {
+							continue
+						}
+						n.rumorMu.RLock()
+						tomb := n.handledDead[p2] || n.seenLeave[p2]
+						n.rumorMu.RUnlock()
+						if !tomb {
+							n.PeerMgr.LearnFromPiggyback(p2)
+						}
+					}
+
+					// vista locale (NO Registry.Update qui)
+					n.PeerMgr.Add(peer)
+					n.PeerMgr.Seen(peer)
+					n.updateQuorum()
+					log.Printf("HB(digest) from %-12s digest=%s peers=%v", peer, hbd.Digest, hbd.Peers)
+
+				case proto.MsgHeartbeat:
+					hb, err := proto.DecodeHeartbeat(env.Data)
+					if err != nil {
+						break
+					}
+					peer := env.From
+
+					// stessa guardia tombstone del caso digest…
+					n.rumorMu.RLock()
+					tsDead, hadDead := n.lastDeadTS[peer]
+					n.rumorMu.RUnlock()
+					if hadDead && env.TS <= tsDead {
+						break
+					}
+					if hadDead && env.TS > tsDead {
+						n.rumorMu.Lock()
+						delete(n.lastDeadTS, peer)
+						delete(n.handledDead, peer)
+						for id := range n.seenSuspect {
+							if strings.HasPrefix(id, "suspect|"+peer+"|") {
+								delete(n.seenSuspect, id)
+							}
+						}
+						for id := range n.seenDead {
+							if strings.HasPrefix(id, "dead|"+peer+"|") {
+								delete(n.seenDead, id)
+							}
+						}
+						n.suspectCount[peer] = 0
+						delete(n.seenLeave, peer)
+						n.rumorMu.Unlock()
+						n.FailureD.UnsuppressPeer(peer)
+						log.Printf("Peer %s RI-ENTRATO (dopo DEAD)", peer)
+					}
+
+					// piggyback peers
 					for _, p2 := range hb.Peers {
 						if p2 == n.ID {
 							continue
@@ -342,13 +386,20 @@ func (n *Node) Run(lookupSvc string) {
 						}
 					}
 
-					// (C) Aggiorna vista locale
+					// QUI aggiorni i servizi (solo col full)
 					n.PeerMgr.Add(peer)
 					n.PeerMgr.Seen(peer)
 					n.updateQuorum()
-					n.Registry.Update(peer, hb.Services)
+					valid := make([]string, 0, len(hb.Services))
+					for _, s := range hb.Services {
+						s = strings.TrimSpace(strings.ToLower(s))
+						if proto.IsValidService(s) {
+							valid = append(valid, s)
+						}
+					}
+					n.Registry.Update(peer, valid)
 
-					log.Printf("HB from %-12s services=%v digest=%s peers=%v",
+					log.Printf("HB(full)   from %-12s services=%v digest=%s peers=%v",
 						peer, hb.Services, hb.Digest, hb.Peers)
 
 				case proto.MsgRumor:
@@ -598,21 +649,33 @@ func (n *Node) Run(lookupSvc string) {
 	}()
 
 	// 4. Fallback al lookup storico
+	// 4. Lookup client mode
 	if lookupSvc != "" {
-		const wait = 4 * time.Second // tempo massimo di attesa
+		const wait = 6 * time.Second // finestra un po' più larga
 		deadline := time.Now().Add(wait)
 
-		lm.Lookup(lookupSvc, DefaultLookupTTL)
-		resend := time.NewTimer(1 * time.Second)
-		check := time.NewTicker(300 * time.Millisecond)
+		// (opzionale) piccolo warm-up per far girare un giro di HB
+		time.Sleep(1200 * time.Millisecond)
+
+		// retry ogni secondo finché non scade la deadline
+		resend := time.NewTicker(1 * time.Second)
+		check := time.NewTicker(250 * time.Millisecond)
 		defer resend.Stop()
 		defer check.Stop()
 
-		for time.Now().Before(deadline) {
+		// primo invio subito
+		lm.Lookup(lookupSvc, DefaultLookupTTL)
+
+		for {
 			select {
 			case <-check.C:
 				if p, ok := n.Registry.Lookup(lookupSvc); ok {
-					fmt.Printf("Service %s -> %s\n", lookupSvc, p)
+					fmt.Printf("Service %s → %s\n", lookupSvc, p)
+					n.Shutdown()
+					return
+				}
+				if time.Now().After(deadline) {
+					fmt.Printf("service %s not fount (timeout)\n", lookupSvc)
 					n.Shutdown()
 					return
 				}
@@ -622,12 +685,8 @@ func (n *Node) Run(lookupSvc string) {
 
 			case <-n.done:
 				return
-
 			}
 		}
-		fmt.Printf("service %s not fount (timeout)\n", lookupSvc)
-		n.Shutdown()
-		return
 	}
 
 	// 5. Nodo normale: non esce mai
