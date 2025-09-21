@@ -118,18 +118,62 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	return n
 }
 
-// dentro node.go
+// node.go
 func (n *Node) AddService(svc string) {
+	// c’era già almeno un servizio prima di aggiungere?
+	had := len(n.Registry.LocalServices()) > 0
+
 	if n.Registry.AddLocalService(n.ID, svc) {
+		if !had {
+			n.ensureRPCServer() // primo servizio → apri TCP adesso
+		}
 		n.GossipM.TriggerHeartbeatFullNow()
 		log.Printf("[SR] add local service=%q → gossip full now", svc)
 	}
 }
+
 func (n *Node) RemoveService(svc string) {
 	if n.Registry.RemoveLocalService(n.ID, svc) {
+		// se ora non ho più servizi locali, chiudo il TCP
+		if len(n.Registry.LocalServices()) == 0 {
+			n.closeRPCServerIfIdle()
+		}
 		n.GossipM.TriggerHeartbeatFullNow()
 		log.Printf("[SR] remove local service=%q → gossip full now", svc)
 	}
+}
+
+func (n *Node) ensureRPCServer() {
+	n.rpcMu.Lock()
+	defer n.rpcMu.Unlock()
+	if n.rpcLn != nil {
+		return // già in ascolto
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
+	if err != nil {
+		log.Printf("[RPC] listen error: %v", err)
+		return
+	}
+	n.rpcLn = ln
+	log.Printf("[RPC] listening on :%d", n.Port)
+	n.rpcWG.Add(1)
+	go func() {
+		defer n.rpcWG.Done()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if strings.Contains(err.Error(), "closed network connection") {
+					return
+				}
+				continue
+			}
+			n.rpcMu.Lock()
+			n.rpcConns[c] = struct{}{}
+			n.rpcMu.Unlock()
+			n.rpcWG.Add(1)
+			go n.handleRPCConn(c) // la tua handler
+		}
+	}()
 }
 
 // conta i peer "alive" basandosi su LastSeen entro failTimeout
@@ -145,6 +189,15 @@ func (n *Node) alivePeerCount() int {
 		}
 	}
 	return cnt
+}
+
+func (n *Node) closeRPCServerIfIdle() {
+	n.rpcMu.Lock()
+	if n.rpcLn != nil {
+		n.rpcLn.Close()
+		n.rpcLn = nil
+	}
+	n.rpcMu.Unlock()
 }
 
 // aggiorna quorumThreshold in base al numero di peer "alive" + nodo locale

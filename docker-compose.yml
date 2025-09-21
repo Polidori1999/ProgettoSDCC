@@ -47,6 +47,7 @@ services:
       - "--port=9003"
       - "--registry=registry:9000"
       - "--services=div"
+      - "--svc-ctrl=/tmp/services.ctrl"
     ports:
       - "9003:9003/udp"
 
@@ -60,6 +61,7 @@ services:
       - "--port=9004"
       - "--registry=registry:9000"
       - "--services=mul"
+      - "--svc-ctrl=/tmp/services.ctrl"
     ports:
       - "9004:9004/udp"
 
@@ -72,7 +74,8 @@ services:
       - "--id=node5:9005"
       - "--port=9005"
       - "--registry=registry:9000"
-      - "--services=sum"
+      - "--services="
+      - "--svc-ctrl=/tmp/services.ctrl"
     ports:
       - "9005:9005/udp"
 
