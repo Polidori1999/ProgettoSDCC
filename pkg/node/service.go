@@ -104,7 +104,7 @@ func (sr *ServiceRegistry) RemoveProvider(provider string) {
 	}
 }
 
-// Lookup restituisce un provider casuale per il servizio.
+// restituisce un provider casuale per il servizio.
 func (sr *ServiceRegistry) Lookup(service string) (string, bool) {
 	sr.mu.RLock()
 	defer sr.mu.RUnlock()
@@ -123,45 +123,6 @@ func (sr *ServiceRegistry) Lookup(service string) (string, bool) {
 		j++
 	}
 	return "", false
-}
-
-// ───────────────────────────────
-// *** NOVITÀ ***  snapshot & delta
-// ───────────────────────────────
-
-// Snapshot restituisce una *copia* leggera: mappa[servizio][]provider.
-func (sr *ServiceRegistry) Snapshot() map[string][]string {
-	out := make(map[string][]string)
-
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	for svc, providers := range sr.Table {
-		for p := range providers {
-			out[svc] = append(out[svc], p)
-		}
-	}
-	return out
-}
-
-// ApplyDelta integra nel registry le entry che mancano.
-// Per semplicità: timbriamo sempre lastSeen = now (non facciamo merge timestamp).
-func (sr *ServiceRegistry) ApplyDelta(delta map[string][]string) {
-	now := time.Now()
-
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
-	for svc, provs := range delta {
-		if sr.Table[svc] == nil {
-			sr.Table[svc] = make(map[string]time.Time)
-		}
-		for _, p := range provs {
-			if _, ok := sr.Table[svc][p]; !ok {
-				sr.Table[svc][p] = now
-			}
-		}
-	}
 }
 
 // AddLocalService aggiunge un servizio locale (selfID = id del nodo).

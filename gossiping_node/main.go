@@ -51,7 +51,6 @@ func fetchRegistryPeers(regAddr, myID string) []string {
 
 		// 3) Parsing
 		parts := strings.Split(reply, "#")
-		log.Printf("[BUILD] marker A %s", time.Now().Format(time.RFC3339Nano))
 
 		var peers []string
 		for _, p := range parts[1:] {

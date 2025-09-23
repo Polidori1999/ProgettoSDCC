@@ -37,7 +37,7 @@ func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager
 	}
 }
 
-// SuppressPeer ferma ogni futura segnalazione per peer
+// ferma ogni futura segnalazione per peer
 func (fd *FailureDetector) SuppressPeer(peer string) {
 	fd.mu.Lock()
 	fd.suppressed[peer] = true
@@ -45,7 +45,7 @@ func (fd *FailureDetector) SuppressPeer(peer string) {
 	fd.mu.Unlock()
 }
 
-// UnsuppressPeer riabilita peer (es. dopo un leave + heartbeat)
+// riabilita peer (es. dopo un leave + heartbeat)
 func (fd *FailureDetector) UnsuppressPeer(peer string) {
 	fd.mu.Lock()
 	delete(fd.suppressed, peer)
@@ -55,7 +55,7 @@ func (fd *FailureDetector) UnsuppressPeer(peer string) {
 	fd.peers.Seen(peer)
 }
 
-// Start avvia il monitoraggio dei peer, gossippando SuspectRumor.
+// S avvia il monitoraggio dei peer, gossippando SuspectRumor.
 // NEW: versione con select su ticker e stopCh.
 func (fd *FailureDetector) Start() {
 	fd.mu.Lock()
@@ -166,7 +166,7 @@ func (fd *FailureDetector) Start() {
 	}(ch)
 }
 
-// NEW: Stop ferma la goroutine del failure detector
+// NEW:  ferma la goroutine del failure detector
 func (fd *FailureDetector) Stop() {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()

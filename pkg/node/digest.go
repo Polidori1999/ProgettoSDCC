@@ -17,7 +17,7 @@ func NewDigestManager() *DigestManager {
 	return &DigestManager{Last: make(map[string]string)}
 }
 
-// Compute calcola uno sha1 sui contenuti di ServiceRegistry in modo deterministico.
+// calcola uno sha1 sui contenuti di ServiceRegistry in modo deterministico.
 func (dm *DigestManager) Compute(reg *ServiceRegistry) string {
 	// 1. ordina servizi
 	services := make([]string, 0, len(reg.Table))
@@ -49,14 +49,4 @@ func (dm *DigestManager) Compute(reg *ServiceRegistry) string {
 	b, _ := json.Marshal(all)
 	h := sha1.Sum(b)
 	return hex.EncodeToString(h[:])
-}
-
-// Changed controlla se newDigest differisce da quello salvato per peer; aggiorna e ritorna true se cambia.
-func (dm *DigestManager) Changed(peer, newDigest string) bool {
-	old, ok := dm.Last[peer]
-	if ok && old == newDigest {
-		return false
-	}
-	dm.Last[peer] = newDigest
-	return true
 }
