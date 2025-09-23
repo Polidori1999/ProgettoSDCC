@@ -125,7 +125,7 @@ func (sr *ServiceRegistry) Lookup(service string) (string, bool) {
 	return "", false
 }
 
-// AddLocalService aggiunge un servizio locale (selfID = id del nodo).
+// Aaggiunge un servizio locale (selfID = id del nodo).
 // Ritorna true se ha cambiato lo stato (nuovo servizio), false se già presente.
 func (sr *ServiceRegistry) AddLocalService(selfID, svc string) bool {
 	svc = normSvc(svc)

@@ -9,14 +9,15 @@ import (
 type MsgType int
 
 const (
-	MsgHeartbeat       MsgType = iota + 1 // 1  – HB “normale”
-	MsgHeartbeatDigest                    // 2  – HB con digest
-	MsgRumor                              // 3  – blind-counter rumor
-	MsgLookup                             // 4  – richiesta di lookup on-demand
-	MsgLookupResponse                     // 5  – risposta a una richiesta di lookup
-	MsgSuspect                            // 6  – rumor “peer sospetto”
-	MsgDead                               // 7  – rumor “peer morto”
-	MsgLeave                              // 8 – nodo che si ritira volontariamente
+	MsgHeartbeat      MsgType = iota + 1 // 1  – HB “normale”
+	MsgHeartbeatLight                    // 2  – HB con digest
+	MsgRumor                             // 3  – blind-counter rumor
+	MsgLookup                            // 4  – richiesta di lookup on-demand
+	MsgLookupResponse                    // 5  – risposta a una richiesta di lookup
+	MsgSuspect                           // 6  – rumor “peer sospetto”
+	MsgDead                              // 7  – rumor “peer morto”
+	MsgLeave                             // 8 – nodo che si ritira volontariamente
+	MsgRepairReq
 )
 
 type Envelope struct {
@@ -31,21 +32,28 @@ type Envelope struct {
 //	HeartbeatDigest: versione leggera inviata ogni secondo
 //
 // ─────────────────────────────────────────────────────────────────────────────
-type HeartbeatDigest struct {
-	Digest string   `json:"digest"`          // SHA-1 del mio snapshot locale
-	Peers  []string `json:"peers,omitempty"` // piggy-back dei peer noti
+type HeartbeatLight struct {
+	//Digest   string   `json:"digest"`
+	Peers []string `json:"peers,omitempty"` // piggy-back dei peer noti
 }
 
 // ---------- payload ----------
 type Heartbeat struct {
 	// ― versione “full”, usata solo nell’anti-entropy (step 2)
-	Services []string `json:"services"`        // elenco servizi offerti
-	Digest   string   `json:"digest"`          // snapshot SHA-1
-	Peers    []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
+	Services []string `json:"services"` // elenco servizi offerti
+	//Digest   string   `json:"digest"`          // snapshot SHA-1
+	Peers []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
 }
+
 type Leave struct {
 	RumorID string `json:"rumorID"` // ID univoco del rumor di leave (serve per F>1)
 	Peer    string `json:"peer"`    // chi sta lasciando
+
+}
+
+// Repair request (payload minimale)
+type RepairReq struct {
+	Nonce int64 `json:"nonce"`
 }
 
 type Rumor struct {
@@ -94,12 +102,13 @@ func Decode(b []byte) (Envelope, error) {
 }
 
 // ---------- heartbeat-digest helpers ----------
-func EncodeHeartbeatDigest(from string, hb HeartbeatDigest) ([]byte, error) {
-	return Encode(MsgHeartbeatDigest, from, hb)
-}
+/*
+func EncodeHeartbeatDigest(from string, hbHeartbeatLight) ([]byte, error) {
+	return Encode(MsgHeartbeatLight from, hb)
+}*/
 
-func DecodeHeartbeatDigest(raw json.RawMessage) (HeartbeatDigest, error) {
-	var hb HeartbeatDigest
+func DecodeHeartbeatLight(raw json.RawMessage) (HeartbeatLight, error) {
+	var hb HeartbeatLight
 	err := json.Unmarshal(raw, &hb)
 	return hb, err
 }
@@ -110,8 +119,8 @@ func DecodeHeartbeat(raw json.RawMessage) (Heartbeat, error) {
 	return hb, err
 }
 
-func DecodeRumor(raw json.RawMessage) (Rumor, error) {
-	var r Rumor
+func DecodeRepairReq(raw json.RawMessage) (RepairReq, error) {
+	var r RepairReq
 	err := json.Unmarshal(raw, &r)
 	return r, err
 }

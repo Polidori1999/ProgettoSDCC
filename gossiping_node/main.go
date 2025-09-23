@@ -83,6 +83,10 @@ func main() {
 	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")    // (al momento non usato da Node.Run)
 	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
 
+	// in main()
+	repairFlag := flag.Bool("repair", true, "Enable periodic push–pull repair")
+	repairEveryFlag := flag.Duration("repair-every", 30*time.Second, "Repair tick period (e.g., 30s)")
+
 	// >>> nuovi flag per i parametri RPC
 	rpcAFlag := flag.Float64("rpc-a", 18, "Parametro A per l'RPC (float64)")
 	rpcBFlag := flag.Float64("rpc-b", 3, "Parametro B per l'RPC (float64)")
@@ -115,7 +119,7 @@ func main() {
 
 	// >>> Unico code path: crea il nodo e fai partire Run
 	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
-
+	n.EnableRepair(*repairFlag, *repairEveryFlag)
 	n.SetRPCParams(*rpcAFlag, *rpcBFlag)
 
 	if *svcCtrlFlag != "" {

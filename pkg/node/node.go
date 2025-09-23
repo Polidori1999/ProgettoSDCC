@@ -20,7 +20,6 @@ type Node struct {
 	rumorMu  sync.RWMutex // ← NUOV
 	PeerMgr  *PeerManager
 	Registry *ServiceRegistry
-	Digests  *DigestManager
 	GossipM  *GossipManager
 	FailureD *FailureDetector
 	ID       string
@@ -50,16 +49,10 @@ type Node struct {
 	//parametri servizi
 	rpcA float64 // parametro A per l'RPC
 	rpcB float64 // parametro B per l'RPC
-}
 
-func hasDeadRumorsFor(peer string, seenDead map[string]bool) bool {
-	prefix := "dead|" + peer + "|"
-	for id := range seenDead {
-		if strings.HasPrefix(id, prefix) {
-			return true
-		}
-	}
-	return false
+	repairEnabled bool
+	repairEvery   time.Duration
+	repairTick    *time.Ticker
 }
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
@@ -79,11 +72,11 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	reg.AddLocal(id, svcCSV)
 	log.Printf("[BOOT] %s local services: %v", id, reg.LocalServices())
 
-	dm := NewDigestManager()
+	//dm := NewDigestManager()
 
 	src := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(src)
-	gm := NewGossipManager(pm, dm, reg, id, r)
+	gm := NewGossipManager(pm, reg, id, r)
 
 	// quorumThreshold iniziale verrà calcolato da updateQuorum()
 	quorum := 0
@@ -93,7 +86,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	n := &Node{
 		PeerMgr:  pm,
 		Registry: reg,
-		Digests:  dm,
+		//Digests:  dm,
 		GossipM:  gm,
 		FailureD: fd,
 		ID:       id,
@@ -200,7 +193,7 @@ func (n *Node) closeRPCServerIfIdle() {
 	n.rpcMu.Unlock()
 }
 
-// aggiorna quorumThreshold in base al numero di peer "alive" + nodo locale
+// aggiorna  in base al numero di peer "alive" + nodo locale
 func (n *Node) updateQuorum() {
 	size := n.alivePeerCount() + 1 // includi me
 	n.quorumThreshold = size/2 + 1
@@ -220,25 +213,12 @@ func (n *Node) alivePeers() []string {
 	return out
 }
 
-func (n *Node) hasLeft(peer string) bool {
-	n.rumorMu.RLock()
-	left := n.seenLeave[peer]
-	n.rumorMu.RUnlock()
-	return left
-}
-
-func (n *Node) markLeft(peer string) {
-	n.rumorMu.Lock()
-	n.seenLeave[peer] = true
-	n.rumorMu.Unlock()
-}
-func (pm *PeerManager) AddIfNew(peer string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	if !pm.Peers[peer] {
-		pm.Peers[peer] = true
-		pm.LastSeen[peer] = time.Now()
+func (n *Node) EnableRepair(enabled bool, every time.Duration) {
+	n.repairEnabled = enabled
+	if every <= 0 {
+		every = 30 * time.Second
 	}
+	n.repairEvery = every
 }
 
 func (pm *PeerManager) LearnFromPiggyback(peer string) {
@@ -249,11 +229,40 @@ func (pm *PeerManager) LearnFromPiggyback(peer string) {
 	}
 }
 
-// SetRPCParams imposta i parametri A e B usati nelle invocazioni RPC
+// imposta i parametri A e B usati nelle invocazioni RPC
 func (n *Node) SetRPCParams(a, b float64) {
 	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
 	n.rpcA = a
 	n.rpcB = b
+}
+func (n *Node) repairRound() {
+	peers := n.alivePeers()
+	if len(peers) == 0 {
+		return
+	}
+	k := int(math.Ceil(math.Log2(float64(len(peers)))))
+	if k < 1 {
+		k = 1
+	}
+	targets := randomSubset(peers, k, n.GossipM.rnd)
+
+	// Prepara pacchetti (una volta sola)
+	full := proto.Heartbeat{
+		Services: n.Registry.LocalServices(),
+		Peers:    n.PeerMgr.List(), // se vuoi, riduci a 2 hint
+	}
+	pktFull, _ := proto.Encode(proto.MsgHeartbeat, n.ID, full)
+
+	req := proto.RepairReq{Nonce: time.Now().UnixNano()}
+	pktReq, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
+
+	for _, p := range targets {
+		// PUSH: mando il mio stato completo
+		n.GossipM.SendUDP(pktFull, p)
+		// PULL: chiedo il loro stato completo
+		n.GossipM.SendUDP(pktReq, p)
+	}
+	log.Printf("[REPAIR] push-pull tick: k=%d targets=%v", k, targets)
 }
 
 func (n *Node) Shutdown() {
@@ -270,6 +279,10 @@ func (n *Node) Shutdown() {
 			time.Sleep(500 * time.Millisecond)
 		}
 
+		if n.repairTick != nil {
+			n.repairTick.Stop()
+			n.repairTick = nil
+		}
 		// Ferma componenti periodiche
 		if n.GossipM != nil {
 			n.GossipM.Stop()
@@ -312,7 +325,7 @@ func (n *Node) Shutdown() {
 	})
 }
 
-// randomSubset estrae fino a n peer a caso da peers
+// estrae fino a n peer a caso da peers
 func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
 	if len(peers) <= k {
 		return peers
@@ -336,6 +349,20 @@ func (n *Node) Run(lookupSvc string) {
 	// 1. Avvia gossip e failure detector
 	n.GossipM.Start()
 	n.FailureD.Start()
+	// Avvia il repair push–pull se abilitato
+	if n.repairEnabled {
+		n.repairTick = time.NewTicker(n.repairEvery)
+		go func() {
+			for {
+				select {
+				case <-n.repairTick.C:
+					n.repairRound()
+				case <-n.done:
+					return
+				}
+			}
+		}()
+	}
 	// avvia RPC TCP se ho servizi locali
 	if ls := n.Registry.LocalServices(); len(ls) > 0 {
 		go n.serveArithmeticTCP(fmt.Sprintf(":%d", n.Port))
@@ -391,8 +418,21 @@ func (n *Node) Run(lookupSvc string) {
 
 				switch env.Type {
 
-				case proto.MsgHeartbeatDigest:
-					hbd, err := proto.DecodeHeartbeatDigest(env.Data)
+				case proto.MsgRepairReq:
+					// payload minimale; se vuoi, puoi controllare error ma non serve
+					_, _ = proto.DecodeRepairReq(env.Data)
+
+					// Rispondi con un HB full al mittente (pull)
+					resp := proto.Heartbeat{
+						Services: n.Registry.LocalServices(),
+						Peers:    n.PeerMgr.List(), // opzionale: 2 hint
+					}
+					out, _ := proto.Encode(proto.MsgHeartbeat, n.ID, resp)
+					n.GossipM.SendUDP(out, env.From)
+					log.Printf("[REPAIR] request from %s → sent HB(full) back", env.From)
+
+				case proto.MsgHeartbeatLight:
+					hbd, err := proto.DecodeHeartbeatLight(env.Data)
 					if err != nil {
 						break
 					}
@@ -443,7 +483,7 @@ func (n *Node) Run(lookupSvc string) {
 					n.PeerMgr.Add(peer)
 					n.PeerMgr.Seen(peer)
 					n.updateQuorum()
-					log.Printf("HB(digest) from %-12s digest=%s peers=%v", peer, hbd.Digest, hbd.Peers)
+					log.Printf("HB(light) from %-12s peers=%v", peer, hbd.Peers)
 
 				case proto.MsgHeartbeat:
 					hb, err := proto.DecodeHeartbeat(env.Data)
@@ -506,8 +546,8 @@ func (n *Node) Run(lookupSvc string) {
 					}
 					n.Registry.Update(peer, valid)
 
-					log.Printf("HB(full)   from %-12s services=%v digest=%s peers=%v",
-						peer, hb.Services, hb.Digest, hb.Peers)
+					log.Printf("HB(full)   from %-12s services=%v peers=%v",
+						peer, hb.Services, hb.Peers)
 
 				case proto.MsgRumor:
 					// TODO: rumor handling

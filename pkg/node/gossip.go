@@ -9,10 +9,10 @@ import (
 )
 
 type GossipManager struct {
-	peers  *PeerManager
-	digest *DigestManager
-	reg    *ServiceRegistry
-	self   string
+	peers *PeerManager
+
+	reg  *ServiceRegistry
+	self string
 
 	// rnd è il generatore casuale locale
 	rnd *rand.Rand
@@ -23,13 +23,12 @@ type GossipManager struct {
 }
 
 // NewGossipManager ora riceve un generatore *rand.Rand
-func NewGossipManager(pm *PeerManager, dm *DigestManager, reg *ServiceRegistry, selfID string, r *rand.Rand) *GossipManager {
+func NewGossipManager(pm *PeerManager, reg *ServiceRegistry, selfID string, r *rand.Rand) *GossipManager {
 	return &GossipManager{
-		peers:  pm,
-		digest: dm,
-		reg:    reg,
-		self:   selfID,
-		rnd:    r,
+		peers: pm,
+		reg:   reg,
+		self:  selfID,
+		rnd:   r,
 	}
 }
 
@@ -65,10 +64,10 @@ func (gm *GossipManager) Start() {
 
 func (gm *GossipManager) sendLightHB() {
 	hb := proto.Heartbeat{
-		Digest: gm.digest.Compute(gm.reg),
-		Peers:  gm.peers.List(), // se vuoi il piggy-back peer
+		//Digest: gm.digest.Compute(gm.reg),
+		Peers: gm.peers.List(), // se vuoi il piggy-back peer
 	}
-	pkt, _ := proto.Encode(proto.MsgHeartbeatDigest, gm.self, hb)
+	pkt, _ := proto.Encode(proto.MsgHeartbeatLight, gm.self, hb)
 	gm.fanout(pkt)
 }
 
@@ -90,8 +89,8 @@ func (gm *GossipManager) Stop() {
 func (gm *GossipManager) sendFullHB() {
 	hb := proto.Heartbeat{
 		Services: gm.reg.LocalServices(), // solo i MIEI servizi
-		Digest:   gm.digest.Compute(gm.reg),
-		Peers:    gm.peers.List(),
+		//Digest:   gm.digest.Compute(gm.reg),
+		Peers: gm.peers.List(),
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeat, gm.self, hb)
 	gm.fanout(pkt)
