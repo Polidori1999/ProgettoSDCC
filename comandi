@@ -21,6 +21,9 @@ docker run --rm --name lookup-node --stop-signal=SIGTERM \
   --id=node6:9006 --port=9006 --peers=node1:9001 --lookup=payments
 
 
+  docker compose run --rm --no-deps --name node6 node --id=node6:9006 --port=9006 --registry=registry:9000 --services=add
+
+
 per toglierlo
 docker rm -f node6
 

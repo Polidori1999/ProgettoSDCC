@@ -53,6 +53,9 @@ type Node struct {
 	repairEnabled bool
 	repairEvery   time.Duration
 	repairTick    *time.Ticker
+
+	lookupTTL int
+	maxTTL    int
 }
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
@@ -105,10 +108,22 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		rpcConns:        make(map[net.Conn]struct{}),
 		rpcA:            18, // default sensati, sovrascrivibili dal main
 		rpcB:            3,
+		lookupTTL:       DefaultLookupTTL,
+		maxTTL:          20,
 	}
 	// calcola il quorum basato su peer iniziali + me
 	n.updateQuorum()
 	return n
+}
+
+func (n *Node) SetLookupTTL(ttl int) {
+	if ttl < 0 {
+		ttl = 0
+	}
+	if ttl > n.maxTTL {
+		ttl = n.maxTTL
+	}
+	n.lookupTTL = ttl
 }
 
 // node.go
@@ -811,7 +826,7 @@ func (n *Node) Run(lookupSvc string) {
 		defer check.Stop()
 
 		// primo invio subito
-		lm.Lookup(lookupSvc, DefaultLookupTTL)
+		lm.Lookup(lookupSvc, n.lookupTTL)
 
 		for {
 			select {
@@ -840,7 +855,7 @@ func (n *Node) Run(lookupSvc string) {
 				}
 
 			case <-resend.C:
-				lm.Lookup(lookupSvc, DefaultLookupTTL)
+				lm.Lookup(lookupSvc, n.lookupTTL)
 
 			case <-n.done:
 				return

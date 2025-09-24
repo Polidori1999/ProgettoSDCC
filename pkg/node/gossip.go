@@ -17,9 +17,10 @@ type GossipManager struct {
 	// rnd è il generatore casuale locale
 	rnd *rand.Rand
 	// NEW
-	stopCh chan struct{}
-	lightT *time.Ticker
-	fullT  *time.Ticker
+	stopCh  chan struct{}
+	lightT  *time.Ticker
+	fullT   *time.Ticker
+	hintIdx int
 }
 
 // NewGossipManager ora riceve un generatore *rand.Rand
@@ -65,7 +66,7 @@ func (gm *GossipManager) Start() {
 func (gm *GossipManager) sendLightHB() {
 	hb := proto.Heartbeat{
 		//Digest: gm.digest.Compute(gm.reg),
-		Peers: gm.peers.List(), // se vuoi il piggy-back peer
+		Peers: gm.peerHints(2), // piggy-back peer
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeatLight, gm.self, hb)
 	gm.fanout(pkt)
@@ -131,4 +132,22 @@ func (gm *GossipManager) SendUDP(data []byte, peerAddr string) {
 func (gm *GossipManager) TriggerHeartbeatFullNow() {
 
 	gm.sendFullHB()
+}
+
+func (gm *GossipManager) peerHints(max int) []string {
+	all := gm.peers.List()
+	n := len(all)
+	if n == 0 || max <= 0 {
+		return nil
+	}
+	if n <= max {
+		return all
+	}
+	start := gm.hintIdx % n
+	gm.hintIdx = (gm.hintIdx + max) % n
+	out := make([]string, 0, max)
+	for i := 0; i < max; i++ {
+		out = append(out, all[(start+i)%n])
+	}
+	return out
 }

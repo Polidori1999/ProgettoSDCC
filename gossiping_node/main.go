@@ -91,6 +91,7 @@ func main() {
 	rpcAFlag := flag.Float64("rpc-a", 18, "Parametro A per l'RPC (float64)")
 	rpcBFlag := flag.Float64("rpc-b", 3, "Parametro B per l'RPC (float64)")
 
+	//piggyBackFlag := flag.Int("piggyBack", 2, "Parametro Piggy Back per heartbeat light")
 	svcCtrlFlag := flag.String("svc-ctrl", "", "file di controllo servizi (comandi: 'ADD <svc>' / 'DEL <svc>')")
 
 	_ = ttlFlag
@@ -121,6 +122,7 @@ func main() {
 	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
 	n.EnableRepair(*repairFlag, *repairEveryFlag)
 	n.SetRPCParams(*rpcAFlag, *rpcBFlag)
+	n.SetLookupTTL(*ttlFlag)
 
 	if *svcCtrlFlag != "" {
 		go watchSvcControlFile(n, *svcCtrlFlag)
