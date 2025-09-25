@@ -74,7 +74,7 @@ services:
       - "--id=node5:9005"
       - "--port=9005"
       - "--registry=registry:9000"
-      - "--services="
+      - "--services=sub"
       - "--svc-ctrl=/tmp/services.ctrl"
     ports:
       - "9005:9005/udp"
@@ -89,8 +89,9 @@ services:
       - "--id=client:9009"                 # ← host "client" = nome container
       - "--port=9009"
       - "--registry=registry:9000"         # introducer unicamente per bootstrap
-      - "--lookup=sub"                  # il servizio che cerchi
-      - "--ttl=3"                          # TTL della ricerca
+      - "--lookup=sub"
+      - "--lookup-mode=gossip"
+      #- "--ttl=3"                          # TTL della ricerca
     ports:
       - "9009:9009/udp"
 

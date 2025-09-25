@@ -80,6 +80,9 @@ func main() {
 	svcFlag := flag.String("services", "", "comma-separated services")
 	registryFlag := flag.String("registry", "", "host:port del service registry")
 	lookupFlag := flag.String("lookup", "", "service lookup then exit")
+	lookupModeFlag := flag.String("lookup-mode", "ttl", "lookup mode: ttl | gossip")
+	pureGossipFlag := flag.Bool("pure-gossip-discovery", false, "do not learn providers from lookup responses")
+
 	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")    // (al momento non usato da Node.Run)
 	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
 
@@ -122,7 +125,10 @@ func main() {
 	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
 	n.EnableRepair(*repairFlag, *repairEveryFlag)
 	n.SetRPCParams(*rpcAFlag, *rpcBFlag)
-	n.SetLookupTTL(*ttlFlag)
+	n.SetLookupTTL(*ttlFlag) // TTL per la modalità TTL
+
+	n.SetLookupMode(*lookupModeFlag)       // "ttl" (default) | "gossip"
+	n.SetLearnFromLookup(!*pureGossipFlag) // false => pure gossip discovery
 
 	if *svcCtrlFlag != "" {
 		go watchSvcControlFile(n, *svcCtrlFlag)

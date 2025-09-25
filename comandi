@@ -4,6 +4,16 @@ docker compose logs -f node1
 docker kill --signal SIGKILL node2
 
 
+
+# 1) in una shell
+docker compose up -d
+while true; do docker compose logs -f --since=1s; done
+
+# 2) in un’altra shell: killa e fai rientrare un nodo
+docker kill node2
+# (o il tuo script di crash/rientro)
+
+
 per rimuovere processi in uso:
 docker ps -a --filter network=progettosdcc_default
 docker rm $(docker ps -a --filter network=progettosdcc_default -q)
@@ -12,31 +22,14 @@ docker network rm progettosdcc_default
 docker compose build
 docker compose up -d registry node1 node2 node3 node4 node5
 
-per aggiungere nuovo nodo
 
 
-docker run --rm --name lookup-node --stop-signal=SIGTERM \
-  --network progettosdcc_default -p 9006:9006/udp \
-  progettosdcc-node:latest \
-  --id=node6:9006 --port=9006 --peers=node1:9001 --lookup=payments
 
 
-  docker compose run --rm --no-deps --name node6 node --id=node6:9006 --port=9006 --registry=registry:9000 --services=add
 
 
 per toglierlo
 docker rm -f node6
-
-docker run --rm \                          # lo elimini quando esce
-  --name lookup-node \                     # nome del container
-  --stop-signal=SIGTERM \                  # chiude in modo “graceful”
-  --network progettosdcc_default \         # stessa network degli altri
-  -p 9006:9006/udp \                       # apre la porta UDP (facoltativo se è solo client)
-  progettosdcc-node:latest \               # immagine buildata da compose
-  --id=node6:9006 \                        # host:porta che userà nel cluster
-  --port=9006 \                            # la porta su cui ascolta
-  --peers=node1:9001 \                     # almeno un seed già up (puoi metterne più di uno, virgole)
-  --lookup=payments                        # ***il servizio da cercare***
 
 
 
@@ -95,4 +88,27 @@ docker exec node2 sh -c 'echo "ADD sum" >> /tmp/services.ctrl'
 docker exec node2 sh -c 'echo "DEL sub" >> /tmp/services.ctrl'
 
 
-docker compose run --rm --no-deps   --name client2   client   --id=client2:9010   --port=9010   --registry=registry:9000   --lookup=sub   --ttl=3
+docker compose run --rm --no-deps --name client2 client \
+  --id=client2:9010 --port=9010 --registry=registry:9000 \
+  --lookup=sub --lookup-mode=gossip --pure-gossip-discovery
+
+
+
+docker compose up -d --build
+
+
+stop=false; trap 'stop=true' INT TERM
+while :; do
+  docker compose logs -f --since=1s --tail=0 || true
+  $stop && break
+  sleep 0.5
+done
+
+
+
+# crash
+docker compose kill node2            # (o docker kill node2)
+
+# stop & start
+docker compose stop node1
+docker compose start node1

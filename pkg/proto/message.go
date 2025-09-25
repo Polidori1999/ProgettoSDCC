@@ -46,9 +46,11 @@ type Heartbeat struct {
 }
 
 type Leave struct {
-	RumorID string `json:"rumorID"` // ID univoco del rumor di leave (serve per F>1)
-	Peer    string `json:"peer"`    // chi sta lasciando
-
+	RumorID string `json:"rumorID"`
+	Peer    string `json:"peer"`
+	Fanout  uint8  `json:"fanout,omitempty"`
+	MaxFw   uint8  `json:"maxfw,omitempty"`
+	TTL     uint8  `json:"ttl,omitempty"`
 }
 
 // Repair request (payload minimale)
@@ -62,11 +64,16 @@ type Rumor struct {
 }
 
 // --- lookup on-demand payloads ---
+// --- lookup on-demand payloads ---
 type LookupRequest struct {
 	ID      string `json:"id"`
 	Service string `json:"service"`
 	Origin  string `json:"origin"`
 	TTL     int    `json:"ttl"`
+
+	// NUOVI (gossip). Omessi (=0) ⇒ modalità flooding.
+	Fanout uint8 `json:"fanout,omitempty"` // B: peer random per hop
+	MaxFw  uint8 `json:"maxfw,omitempty"`  // F: quante volte inoltrare la stessa rumor
 }
 
 type LookupResponse struct {
@@ -76,13 +83,19 @@ type LookupResponse struct {
 
 // --- suspect/dead rumors payloads ---
 type SuspectRumor struct {
-	RumorID string `json:"rumorID"` // un ID univoco per dedup
-	Peer    string `json:"peer"`    // il peer sospetto
+	RumorID string `json:"rumorID"`
+	Peer    string `json:"peer"`
+	Fanout  uint8  `json:"fanout,omitempty"` // B: peer random per hop
+	MaxFw   uint8  `json:"maxfw,omitempty"`  // F: volte che inoltro la stessa rumor
+	TTL     uint8  `json:"ttl,omitempty"`    // hop residui
 }
 
 type DeadRumor struct {
-	RumorID string `json:"rumorID"` // un ID univoco per dedup
-	Peer    string `json:"peer"`    // il peer confermato morto
+	RumorID string `json:"rumorID"`
+	Peer    string `json:"peer"`
+	Fanout  uint8  `json:"fanout,omitempty"`
+	MaxFw   uint8  `json:"maxfw,omitempty"`
+	TTL     uint8  `json:"ttl,omitempty"`
 }
 
 // ---------- generic helpers ----------

@@ -4,7 +4,6 @@ import (
 	"ProgettoSDCC/pkg/proto"
 	"fmt"
 	"log"
-	"math"
 	"sync"
 	"time"
 )
@@ -21,7 +20,32 @@ type FailureDetector struct {
 	suppressed map[string]bool // peer → già gossipato DeadRumor / rimosso
 
 	// NEW: canale di stop per chiudere la goroutine pulitamente
-	stopCh chan struct{}
+	stopCh  chan struct{}
+	fanoutB int
+	maxFwF  int
+	ttlT    int
+}
+
+func (fd *FailureDetector) SetGossipParams(B, F, T int) {
+	if B < 1 {
+		B = 1
+	}
+	if B > 255 {
+		B = 255
+	}
+	if F < 1 {
+		F = 1
+	}
+	if F > 255 {
+		F = 255
+	}
+	if T < 1 {
+		T = 1
+	}
+	if T > 255 {
+		T = 255
+	}
+	fd.fanoutB, fd.maxFwF, fd.ttlT = B, F, T
 }
 
 func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager, suspectT, failT time.Duration) *FailureDetector {
@@ -110,48 +134,43 @@ func (fd *FailureDetector) Start() {
 							log.Printf("Peer %s SUSPICIOUS (no heartbeat for %v)", peer, age)
 
 							rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
-							sr := proto.SuspectRumor{RumorID: rumorID, Peer: peer}
+							sr := proto.SuspectRumor{
+								RumorID: rumorID,
+								Peer:    peer,
+								Fanout:  uint8(fd.fanoutB), // B
+								MaxFw:   uint8(fd.maxFwF),  // F
+								TTL:     uint8(fd.ttlT),    // T
+							}
 							out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
 							if err == nil {
-								// --- fanout calcolato sui TARGETS (escludendo il sospetto) ---
+								// targets = tutti i peer tranne il sospetto
 								all := fd.peers.List()
-								n := len(all) // peers noti (può includere il sospetto)
-								if n == 0 {
-									log.Printf("[FD] suspect fanout: nessun peer noto (exclude=%s)", peer)
-								} else {
-									// filtra il sospetto
-									filtered := make([]string, 0, n)
-									for _, p := range all {
-										if p != peer {
-											filtered = append(filtered, p)
-										}
-									}
-									m := len(filtered) // targets effettivi (senza il sospetto)
-									if m > 0 {
-										k := int(math.Ceil(math.Log2(float64(m))))
-										if k < 1 {
-											k = 1
-										}
-										if k > m {
-											k = m
-										}
-										targets := randomSubset(filtered, k, fd.gossip.rnd)
-
-										log.Printf("[FD] suspect fanout k=%d n=%d m=%d targets=%v exclude=%s",
-											k, n, m, targets, peer)
-
-										for _, p := range targets {
-											fd.gossip.SendUDP(out, p)
-										}
-									} else {
-										log.Printf("[FD] suspect fanout: nessun target (solo il sospetto era noto) exclude=%s", peer)
+								filtered := make([]string, 0, len(all))
+								for _, p := range all {
+									if p != peer {
+										filtered = append(filtered, p)
 									}
 								}
 
-								// --- self-vote immediato via loopback ---
-								// NB: peers.List() in genere NON contiene self, quindi lo inviamo esplicitamente a noi stessi
+								// fanout B fisso (gossip), non k=log N
+								B := fd.fanoutB
+								if B < 1 {
+									B = 1
+								}
+								if B > len(filtered) {
+									B = len(filtered)
+								}
+
+								for _, p := range randomSubset(filtered, B, fd.gossip.rnd) {
+									fd.gossip.SendUDP(out, p)
+								}
+								log.Printf("[FD] SUSPECT GOSSIP %s B=%d F=%d TTL=%d targets=%v",
+									peer, fd.fanoutB, fd.maxFwF, fd.ttlT, filtered)
+
+								// self-vote via loopback (fa scattare subito il tuo handler MsgSuspect)
 								fd.gossip.SendUDP(out, fd.gossip.self)
 							}
+							continue
 						}
 
 						continue
