@@ -33,16 +33,18 @@ type Envelope struct {
 //
 // ─────────────────────────────────────────────────────────────────────────────
 type HeartbeatLight struct {
-	//Digest   string   `json:"digest"`
-	Peers []string `json:"peers,omitempty"` // piggy-back dei peer noti
+	Epoch  int64    `json:"epoch"`
+	SvcVer uint64   `json:"svcver"`
+	Peers  []string `json:"peers,omitempty"` // piggy-back dei peer noti
 }
 
 // ---------- payload ----------
 type Heartbeat struct {
 	// ― versione “full”, usata solo nell’anti-entropy (step 2)
 	Services []string `json:"services"` // elenco servizi offerti
-	//Digest   string   `json:"digest"`          // snapshot SHA-1
-	Peers []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
+	Epoch    int64    `json:"epoch"`
+	SvcVer   uint64   `json:"svcver"`          // snapshot SHA-1
+	Peers    []string `json:"peers,omitempty"` // piggy-back peer list (facolt.)
 }
 
 type Leave struct {

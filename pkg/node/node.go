@@ -480,13 +480,12 @@ func (n *Node) Run(lookupSvc string) {
 				switch env.Type {
 
 				case proto.MsgRepairReq:
-					// payload minimale; se vuoi, puoi controllare error ma non serve
 					_, _ = proto.DecodeRepairReq(env.Data)
-
-					// Rispondi con un HB full al mittente (pull)
 					resp := proto.Heartbeat{
+						Epoch:    n.Registry.LocalEpoch(),
+						SvcVer:   n.Registry.LocalVersion(),
 						Services: n.Registry.LocalServices(),
-						Peers:    n.PeerMgr.List(), // opzionale: 2 hint
+						Peers:    n.PeerMgr.List(),
 					}
 					out, _ := proto.Encode(proto.MsgHeartbeat, n.ID, resp)
 					n.GossipM.SendUDP(out, env.From)
@@ -568,6 +567,11 @@ func (n *Node) Run(lookupSvc string) {
 						}
 					}
 
+					if e0, v0, ok := n.Registry.RemoteMeta(env.From); !ok || hbd.Epoch > e0 || (hbd.Epoch == e0 && hbd.SvcVer > v0) {
+						req := proto.RepairReq{Nonce: time.Now().UnixNano()}
+						out, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
+						n.GossipM.SendUDP(out, env.From)
+					}
 					// vista locale
 					n.PeerMgr.Add(peer)
 					n.PeerMgr.Seen(peer)
@@ -660,11 +664,13 @@ func (n *Node) Run(lookupSvc string) {
 							valid = append(valid, s)
 						}
 					}
-					n.Registry.Update(peer, valid)
-					log.Printf("HB(full)   from %-12s services=%v peers=%v", peer, hb.Services, hb.Peers)
+					if n.Registry.UpdateWithVersion(peer, valid, hb.Epoch, hb.SvcVer) {
+						log.Printf("HB(full)   from %-12s epoch=%d ver=%d services=%v peers=%v", peer, hb.Epoch, hb.SvcVer, valid, hb.Peers)
+					} else {
+						log.Printf("HB(full)   from %-12s ignorato (epoch/ver non nuovi)", peer)
+					}
 
-				case proto.MsgRumor:
-					// TODO: rumor handling
+					log.Printf("HB(full)   from %-12s services=%v peers=%v", peer, hb.Services, hb.Peers)
 
 				case proto.MsgLookup:
 					lm.HandleRequest(env, srcAddr)
@@ -803,6 +809,7 @@ func (n *Node) Run(lookupSvc string) {
 						n.FailureD.SuppressPeer(d.Peer)
 						delete(n.suspectCount, d.Peer)
 						n.Registry.RemoveProvider(d.Peer)
+						n.Registry.ResetRemoteMeta(d.Peer)
 						n.updateQuorum()
 						n.handledDead[d.Peer] = true
 					}
@@ -931,8 +938,9 @@ func (n *Node) Run(lookupSvc string) {
 			} // 1 hop spesso è poco
 			const fanout = 3 // B
 			const maxfw = 2  // F
-			reqID := lm.LookupGossip(lookupSvc, ttl, fanout, maxfw)
-			log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, fanout, maxfw)
+
+			reqID := lm.LookupGossip(lookupSvc, ttl, n.fdB, n.fdF)
+			log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, n.fdB, n.fdF)
 
 			// (opzionale) unica riparazione dopo ~900ms
 			time.AfterFunc(900*time.Millisecond, func() {

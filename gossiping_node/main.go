@@ -87,7 +87,7 @@ func main() {
 	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
 
 	// in main()
-	repairFlag := flag.Bool("repair", true, "Enable periodic push–pull repair")
+	repairFlag := flag.Bool("repair", false, "Enable periodic push–pull repair")
 	repairEveryFlag := flag.Duration("repair-every", 30*time.Second, "Repair tick period (e.g., 30s)")
 
 	// >>> nuovi flag per i parametri RPC

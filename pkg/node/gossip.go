@@ -65,10 +65,22 @@ func (gm *GossipManager) Start() {
 
 func (gm *GossipManager) sendLightHB() {
 	hb := proto.Heartbeat{
-		//Digest: gm.digest.Compute(gm.reg),
-		Peers: gm.peerHints(2), // piggy-back peer
+		Epoch:  gm.reg.LocalEpoch(),
+		SvcVer: gm.reg.LocalVersion(),
+		Peers:  gm.peerHints(2),
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeatLight, gm.self, hb)
+	gm.fanout(pkt)
+}
+
+func (gm *GossipManager) sendFullHB() {
+	hb := proto.Heartbeat{
+		Epoch:    gm.reg.LocalEpoch(),
+		SvcVer:   gm.reg.LocalVersion(),
+		Services: gm.reg.LocalServices(),
+		Peers:    gm.peers.List(),
+	}
+	pkt, _ := proto.Encode(proto.MsgHeartbeat, gm.self, hb)
 	gm.fanout(pkt)
 }
 
@@ -85,16 +97,6 @@ func (gm *GossipManager) Stop() {
 		gm.fullT.Stop()
 		gm.fullT = nil
 	}
-}
-
-func (gm *GossipManager) sendFullHB() {
-	hb := proto.Heartbeat{
-		Services: gm.reg.LocalServices(), // solo i MIEI servizi
-		//Digest:   gm.digest.Compute(gm.reg),
-		Peers: gm.peers.List(),
-	}
-	pkt, _ := proto.Encode(proto.MsgHeartbeat, gm.self, hb)
-	gm.fanout(pkt)
 }
 
 func (gm *GossipManager) fanout(pkt []byte) {
