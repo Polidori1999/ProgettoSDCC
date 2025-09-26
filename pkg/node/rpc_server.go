@@ -2,8 +2,10 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"ProgettoSDCC/pkg/proto"
@@ -94,4 +96,50 @@ func (n *Node) handleRPCConn(c net.Conn) {
 		OK:     true,
 		Result: res,
 	})
+}
+
+// Avvia il listener TCP se non già attivo.
+func (n *Node) ensureRPCServer() {
+	n.rpcMu.Lock()
+	defer n.rpcMu.Unlock()
+	if n.rpcLn != nil {
+		return
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
+	if err != nil {
+		log.Printf("[RPC] listen error: %v", err)
+		return
+	}
+	n.rpcLn = ln
+	log.Printf("[RPC] listening on :%d", n.Port)
+
+	n.rpcWG.Add(1)
+	go func() {
+		defer n.rpcWG.Done()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if strings.Contains(err.Error(), "closed network connection") {
+					return
+				}
+				continue
+			}
+			n.rpcMu.Lock()
+			n.rpcConns[c] = struct{}{}
+			n.rpcMu.Unlock()
+
+			n.rpcWG.Add(1)
+			go n.handleRPCConn(c) // esistente nel tuo progetto
+		}
+	}()
+}
+
+// Chiude il listener quando non ho più servizi locali.
+func (n *Node) closeRPCServerIfIdle() {
+	n.rpcMu.Lock()
+	if n.rpcLn != nil {
+		_ = n.rpcLn.Close()
+		n.rpcLn = nil
+	}
+	n.rpcMu.Unlock()
 }

@@ -4,7 +4,6 @@ import (
 	"ProgettoSDCC/pkg/proto"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -154,7 +153,6 @@ func (n *Node) SetLookupMode(mode string) {
 }
 func (n *Node) SetLearnFromLookup(v bool) { n.learnFromLookup = v }
 
-// node.go
 func (n *Node) AddService(svc string) {
 	// c’era già almeno un servizio prima di aggiungere?
 	had := len(n.Registry.LocalServices()) > 0
@@ -179,83 +177,6 @@ func (n *Node) RemoveService(svc string) {
 	}
 }
 
-func (n *Node) ensureRPCServer() {
-	n.rpcMu.Lock()
-	defer n.rpcMu.Unlock()
-	if n.rpcLn != nil {
-		return // già in ascolto
-	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
-	if err != nil {
-		log.Printf("[RPC] listen error: %v", err)
-		return
-	}
-	n.rpcLn = ln
-	log.Printf("[RPC] listening on :%d", n.Port)
-	n.rpcWG.Add(1)
-	go func() {
-		defer n.rpcWG.Done()
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				if strings.Contains(err.Error(), "closed network connection") {
-					return
-				}
-				continue
-			}
-			n.rpcMu.Lock()
-			n.rpcConns[c] = struct{}{}
-			n.rpcMu.Unlock()
-			n.rpcWG.Add(1)
-			go n.handleRPCConn(c) // la tua handler
-		}
-	}()
-}
-
-// conta i peer "alive" basandosi su LastSeen entro failTimeout
-func (n *Node) alivePeerCount() int {
-
-	n.PeerMgr.mu.Lock()
-	defer n.PeerMgr.mu.Unlock()
-	now := time.Now()
-	cnt := 0
-	for _, ts := range n.PeerMgr.LastSeen {
-		if now.Sub(ts) <= n.FailureD.failTimeout {
-			cnt++
-		}
-	}
-	return cnt
-}
-
-func (n *Node) closeRPCServerIfIdle() {
-	n.rpcMu.Lock()
-	if n.rpcLn != nil {
-		n.rpcLn.Close()
-		n.rpcLn = nil
-	}
-	n.rpcMu.Unlock()
-}
-
-// aggiorna  in base al numero di peer "alive" + nodo locale
-func (n *Node) updateQuorum() {
-	size := n.alivePeerCount() + 1 // includi me
-	n.quorumThreshold = size/2 + 1
-}
-
-// restituisce la slice degli indirizzi dei peer "alive"
-func (n *Node) alivePeers() []string {
-	n.PeerMgr.mu.Lock()
-	defer n.PeerMgr.mu.Unlock()
-	now := time.Now()
-	var out []string
-	for peer, ts := range n.PeerMgr.LastSeen {
-		if now.Sub(ts) <= n.FailureD.failTimeout {
-			out = append(out, peer)
-		}
-	}
-	return out
-}
-
 func (n *Node) EnableRepair(enabled bool, every time.Duration) {
 	n.repairEnabled = enabled
 	if every <= 0 {
@@ -277,35 +198,6 @@ func (n *Node) SetRPCParams(a, b float64) {
 	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
 	n.rpcA = a
 	n.rpcB = b
-}
-func (n *Node) repairRound() {
-	peers := n.alivePeers()
-	if len(peers) == 0 {
-		return
-	}
-	k := int(math.Ceil(math.Log2(float64(len(peers)))))
-	if k < 1 {
-		k = 1
-	}
-	targets := randomSubset(peers, k, n.GossipM.rnd)
-
-	// Prepara pacchetti (una volta sola)
-	full := proto.Heartbeat{
-		Services: n.Registry.LocalServices(),
-		Peers:    n.PeerMgr.List(), // se vuoi, riduci a 2 hint
-	}
-	pktFull, _ := proto.Encode(proto.MsgHeartbeat, n.ID, full)
-
-	req := proto.RepairReq{Nonce: time.Now().UnixNano()}
-	pktReq, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
-
-	for _, p := range targets {
-		// PUSH: mando il mio stato completo
-		n.GossipM.SendUDP(pktFull, p)
-		// PULL: chiedo il loro stato completo
-		n.GossipM.SendUDP(pktReq, p)
-	}
-	log.Printf("[REPAIR] push-pull tick: k=%d targets=%v", k, targets)
 }
 
 func (n *Node) Shutdown() {
@@ -378,17 +270,6 @@ func (n *Node) Shutdown() {
 		time.Sleep(100 * time.Millisecond)
 		log.Printf("← Shutdown completato")
 	})
-}
-
-// estrae fino a n peer a caso da peers
-func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
-	if len(peers) <= k {
-		return peers
-	}
-	out := make([]string, len(peers))
-	copy(out, peers)
-	rnd.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
-	return out[:k]
 }
 
 func (n *Node) Run(lookupSvc string) {
@@ -476,381 +357,37 @@ func (n *Node) Run(lookupSvc string) {
 				switch env.Type {
 
 				case proto.MsgRepairReq:
-					_, _ = proto.DecodeRepairReq(env.Data)
-					resp := proto.Heartbeat{
-						Epoch:    n.Registry.LocalEpoch(),
-						SvcVer:   n.Registry.LocalVersion(),
-						Services: n.Registry.LocalServices(),
-						Peers:    n.PeerMgr.List(),
-					}
-					out, _ := proto.Encode(proto.MsgHeartbeat, n.ID, resp)
-					n.GossipM.SendUDP(out, env.From)
-					log.Printf("[REPAIR] request from %s → sent HB(full) back", env.From)
+					n.handleRepairReq(env)
 
 				case proto.MsgHeartbeatLight:
-					hbd, err := proto.DecodeHeartbeatLight(env.Data)
-					if err != nil {
-						break
+					if hbd, err := proto.DecodeHeartbeatLight(env.Data); err == nil {
+						n.handleHeartbeatLight(env, hbd)
 					}
-					peer := env.From
-
-					// --- guardia tombstone via ServiceRegistry ---
-					if eT, vT, hadTomb := n.Registry.TombMeta(peer); hadTomb {
-						// ignora se NON più nuovo del tombstone
-						if !(hbd.Epoch > eT || (hbd.Epoch == eT && hbd.SvcVer > vT)) {
-							break
-						}
-						// revival: pulizia e unsuppress
-						n.Registry.ClearTombMeta(peer)
-
-						n.rumorMu.Lock()
-						delete(n.handledDead, peer)
-						delete(n.seenLeave, peer)
-						n.suspectCount[peer] = 0
-						for id := range n.seenSuspect {
-							if strings.HasPrefix(id, "suspect|"+peer+"|") {
-								delete(n.seenSuspect, id)
-							}
-						}
-						for id := range n.seenDead {
-							if strings.HasPrefix(id, "dead|"+peer+"|") {
-								delete(n.seenDead, id)
-							}
-						}
-						n.rumorMu.Unlock()
-
-						n.FailureD.UnsuppressPeer(peer)
-						log.Printf("Peer %s RI-ENTRATO (revival) epoch=%d ver=%d", peer, hbd.Epoch, hbd.SvcVer)
-					}
-
-					// piggyback peers (evita reimport dei tombstoned/left e di chi ha tombMeta)
-					for _, p2 := range hbd.Peers {
-						if p2 == n.ID {
-							continue
-						}
-						n.rumorMu.RLock()
-						tombLocal := n.handledDead[p2] || n.seenLeave[p2]
-						n.rumorMu.RUnlock()
-						if tombLocal {
-							continue
-						}
-						if _, _, tombReg := n.Registry.TombMeta(p2); tombReg {
-							continue
-						}
-						n.PeerMgr.LearnFromPiggyback(p2)
-					}
-
-					// richiedi repair se il meta remoto è più nuovo
-					if e0, v0, ok := n.Registry.RemoteMeta(peer); !ok || hbd.Epoch > e0 || (hbd.Epoch == e0 && hbd.SvcVer > v0) {
-						req := proto.RepairReq{Nonce: time.Now().UnixNano()}
-						out, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
-						n.GossipM.SendUDP(out, peer)
-					}
-
-					// aggiorna vista locale
-					n.PeerMgr.Add(peer)
-					n.PeerMgr.Seen(peer)
-					n.updateQuorum()
-					log.Printf("HB(light) from %-12s peers=%v", peer, hbd.Peers)
 
 				case proto.MsgHeartbeat:
-					hb, err := proto.DecodeHeartbeat(env.Data)
-					if err != nil {
-						break
-					}
-					peer := env.From
-
-					// --- guardia tombstone via ServiceRegistry ---
-					if eT, vT, hadTomb := n.Registry.TombMeta(peer); hadTomb {
-						if !(hb.Epoch > eT || (hb.Epoch == eT && hb.SvcVer > vT)) {
-							break
-						}
-						n.Registry.ClearTombMeta(peer)
-
-						n.rumorMu.Lock()
-						delete(n.handledDead, peer)
-						delete(n.seenLeave, peer)
-						n.suspectCount[peer] = 0
-						for id := range n.seenSuspect {
-							if strings.HasPrefix(id, "suspect|"+peer+"|") {
-								delete(n.seenSuspect, id)
-							}
-						}
-						for id := range n.seenDead {
-							if strings.HasPrefix(id, "dead|"+peer+"|") {
-								delete(n.seenDead, id)
-							}
-						}
-						n.rumorMu.Unlock()
-
-						n.FailureD.UnsuppressPeer(peer)
-						log.Printf("Peer %s RI-ENTRATO (revival) epoch=%d ver=%d", peer, hb.Epoch, hb.SvcVer)
-					}
-
-					// piggyback peers (skippa anche chi ha tombMeta)
-					for _, p2 := range hb.Peers {
-						if p2 == n.ID {
-							continue
-						}
-						n.rumorMu.RLock()
-						tombLocal := n.handledDead[p2] || n.seenLeave[p2]
-						n.rumorMu.RUnlock()
-						if tombLocal {
-							continue
-						}
-						if _, _, tombReg := n.Registry.TombMeta(p2); tombReg {
-							continue
-						}
-						n.PeerMgr.LearnFromPiggyback(p2)
-					}
-
-					// update servizi + vista locale
-					n.PeerMgr.Add(peer)
-					n.PeerMgr.Seen(peer)
-					n.updateQuorum()
-
-					valid := make([]string, 0, len(hb.Services))
-					for _, s := range hb.Services {
-						s = strings.TrimSpace(strings.ToLower(s))
-						if proto.IsValidService(s) {
-							valid = append(valid, s)
-						}
-					}
-					if n.Registry.UpdateWithVersion(peer, valid, hb.Epoch, hb.SvcVer) {
-						log.Printf("HB(full)   from %-12s epoch=%d ver=%d services=%v peers=%v", peer, hb.Epoch, hb.SvcVer, valid, hb.Peers)
-					} else {
-						log.Printf("HB(full)   from %-12s ignorato (epoch/ver non nuovi)", peer)
+					if hb, err := proto.DecodeHeartbeat(env.Data); err == nil {
+						n.handleHeartbeatFull(env, hb)
 					}
 
 				case proto.MsgLookup:
-					lm.HandleRequest(env, srcAddr)
+					n.handleLookup(env, lm, srcAddr)
+
 				case proto.MsgLookupResponse:
-					lm.HandleResponse(env)
+					n.handleLookupResponse(env, lm)
+
 				case proto.MsgSuspect:
-					r, err := proto.DecodeSuspectRumor(env.Data)
-					if err != nil {
-						break
-					}
-
-					// BLIND-COUNTER: incremento viste; stop oltre F
-					n.rumorMu.Lock()
-					cnt := n.suspectSeenCnt[r.RumorID] + 1
-					n.suspectSeenCnt[r.RumorID] = cnt
-					tomb := n.seenLeave[r.Peer] || n.handledDead[r.Peer]
-					n.rumorMu.Unlock()
-					if tomb {
-						break
-					}
-					if r.MaxFw > 0 && cnt > r.MaxFw {
-						break
-					}
-
-					// Filtro “fresco”: se per me è fresco, non voto (forward-only)
-					fresh := false
-					if last, ok := n.PeerMgr.GetLastSeen(r.Peer); ok && time.Since(last) < n.FailureD.suspectTimeout {
-						fresh = true
-					}
-
-					if !fresh && cnt == 1 {
-						// APPLY-ONCE: voto solo alla prima vista
-						n.rumorMu.Lock()
-						n.suspectCount[r.Peer]++
-						votes := n.suspectCount[r.Peer]
-						need := n.quorumThreshold
-						n.rumorMu.Unlock()
-
-						if votes >= need && !n.handledDead[r.Peer] {
-							n.rumorMu.Lock()
-							n.handledDead[r.Peer] = true
-							n.rumorMu.Unlock()
-							log.Printf("Peer %s DEAD (quorum %d raggiunto)", r.Peer, need)
-
-							// Emitti DEAD rumor
-							tsNow := time.Now().UnixNano()
-							d := proto.DeadRumor{
-								RumorID: fmt.Sprintf("dead|%s|%d", r.Peer, tsNow),
-								Peer:    r.Peer,
-								Fanout:  uint8(n.fdB),
-								MaxFw:   uint8(n.fdF),
-								TTL:     uint8(n.fdT),
-							}
-							outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-
-							// invio GOSSIP ai vivi, escluso il morto
-							targets := exclude(n.alivePeers(), r.Peer)
-							B := n.fdB
-							if B < 1 {
-								B = 1
-							}
-							if B > len(targets) {
-								B = len(targets)
-							}
-							for _, p := range randomSubset(targets, B, n.GossipM.rnd) {
-								n.GossipM.SendUDP(outD, p)
-							}
-
-							// effetti locali di DEAD
-							// effetti locali di DEAD (con tombstone meta)
-							if e, v, ok := n.Registry.RemoteMeta(r.Peer); ok {
-								n.Registry.SaveTombMeta(r.Peer, e, v) // <-- salva meta per la guardia di revival
-							}
-							n.PeerMgr.Remove(r.Peer)
-							n.FailureD.SuppressPeer(r.Peer)
-							n.Registry.RemoveProvider(r.Peer)
-							n.Registry.ResetRemoteMeta(r.Peer) // <-- azzera il meta remoto
-							n.updateQuorum()
-							delete(n.suspectCount, r.Peer)
-
-						}
-					}
-
-					// FORWARD per-hop (GOSSIP): TTL-- e inoltra a B random (escludi mittente e sospetto)
-					if r.TTL > 0 {
-						r.TTL--
-						outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
-						peers := exclude(n.alivePeers(), env.From, r.Peer) // sollo vivi
-						B := int(r.Fanout)
-						if B < 1 {
-							B = 1
-						}
-						if B > len(peers) {
-							B = len(peers)
-						}
-						for _, p := range randomSubset(peers, B, n.GossipM.rnd) {
-							n.GossipM.SendUDP(outS, p)
-						}
-						log.Printf("fwd SUSPECT %s TTL=%d B=%d seen=%d/%d", r.Peer, r.TTL, B, cnt, r.MaxFw)
+					if r, err := proto.DecodeSuspectRumor(env.Data); err == nil {
+						n.handleSuspect(env, r)
 					}
 
 				case proto.MsgDead:
-					d, err := proto.DecodeDeadRumor(env.Data)
-					if err != nil {
-						break
-					}
-
-					// Filtro freschezza locale: se per me il peer è "fresco", non applico (solo forward).
-					apply := true
-					if last, ok := n.PeerMgr.GetLastSeen(d.Peer); ok && time.Since(last) < n.FailureD.suspectTimeout {
-						apply = false
-					}
-
-					// BLIND-COUNTER + rispetto di F
-					n.rumorMu.Lock()
-					cnt := n.deadSeenCnt[d.RumorID] + 1
-					n.deadSeenCnt[d.RumorID] = cnt
-
-					// se già left o già gestito dead, esci dal ramo "apply"
-					alreadyLeft := n.seenLeave[d.Peer]
-					alreadyDead := n.handledDead[d.Peer]
-					n.rumorMu.Unlock()
-
-					if d.MaxFw > 0 && cnt > d.MaxFw {
-						break
-					}
-
-					// APPLY-ONCE
-					if apply && !alreadyLeft && !alreadyDead && cnt == 1 {
-						log.Printf("DEAD %s — rumor da %s (%s)", d.Peer, env.From, d.RumorID)
-
-						// ricorda il meta di quando muore, per la guardia di revival
-						if e, v, ok := n.Registry.RemoteMeta(d.Peer); ok {
-							n.Registry.SaveTombMeta(d.Peer, e, v)
-						}
-
-						n.PeerMgr.Remove(d.Peer)
-						n.FailureD.SuppressPeer(d.Peer)
-						n.Registry.RemoveProvider(d.Peer)
-						n.Registry.ResetRemoteMeta(d.Peer)
-						n.updateQuorum()
-
-						n.rumorMu.Lock()
-						n.handledDead[d.Peer] = true
-						n.rumorMu.Unlock()
-					}
-
-					// FORWARD GOSSIP per-hop (TTL--)
-					if d.TTL > 0 {
-						d.TTL--
-						outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-
-						peers := n.alivePeers()
-						filtered := make([]string, 0, len(peers))
-						for _, p := range peers {
-							if p != env.From && p != d.Peer {
-								filtered = append(filtered, p)
-							}
-						}
-
-						B := int(d.Fanout)
-						if B < 1 {
-							B = 1
-						}
-						if B > len(filtered) {
-							B = len(filtered)
-						}
-
-						for _, p := range randomSubset(filtered, B, n.GossipM.rnd) {
-							n.GossipM.SendUDP(outD, p)
-						}
-						log.Printf("fwd DEAD %s TTL=%d B=%d seen=%d/%d", d.Peer, d.TTL, B, cnt, d.MaxFw)
+					if d, err := proto.DecodeDeadRumor(env.Data); err == nil {
+						n.handleDead(env, d)
 					}
 
 				case proto.MsgLeave:
-					lv, err := proto.DecodeLeave(env.Data)
-					if err != nil {
-						log.Printf("bad Leave payload: %v", err)
-						break
-					}
-					peer := lv.Peer
-					rid := lv.RumorID
-					if rid == "" {
-						rid = fmt.Sprintf("leave|%s|%d|", peer, time.Now().UnixNano())
-					}
-
-					n.rumorMu.Lock()
-					cnt := n.leaveSeenCnt[rid] + 1
-					n.leaveSeenCnt[rid] = cnt
-					already := n.seenLeave[peer]
-					if !already {
-						n.seenLeave[peer] = true
-						// salva meta per guardia revival
-						if e, v, ok := n.Registry.RemoteMeta(peer); ok {
-							n.Registry.SaveTombMeta(peer, e, v)
-						}
-					}
-					n.rumorMu.Unlock()
-
-					if lv.MaxFw > 0 && cnt > lv.MaxFw {
-						break
-					}
-
-					if !already && cnt == 1 {
-						n.PeerMgr.Remove(peer)
-						n.FailureD.SuppressPeer(peer) // ← NEW
-						n.Registry.RemoveProvider(peer)
-						n.Registry.ResetRemoteMeta(peer) // ← NEW
-						n.updateQuorum()
-						log.Printf("Peer %s LEFT (RID=%s)", peer, rid)
-					}
-
-					if lv.TTL > 0 {
-						lv.TTL--
-						fwd := lv
-						fwd.RumorID = rid
-						raw, _ := proto.Encode(proto.MsgLeave, n.ID, fwd)
-
-						peers := exclude(n.alivePeers(), env.From, peer)
-						B := int(lv.Fanout)
-						if B < 1 {
-							B = 1
-						}
-						if B > len(peers) {
-							B = len(peers)
-						}
-						for _, p := range randomSubset(peers, B, n.GossipM.rnd) {
-							n.GossipM.SendUDP(raw, p)
-						}
-						log.Printf("fwd LEAVE %s TTL=%d B=%d seen=%d/%d", peer, lv.TTL, B, cnt, lv.MaxFw)
+					if lv, err := proto.DecodeLeave(env.Data); err == nil {
+						n.handleLeave(env, lv)
 					}
 
 				default:
@@ -939,21 +476,4 @@ func (n *Node) Run(lookupSvc string) {
 	// 5. Nodo normale: non esce mai
 	<-n.done
 	return
-}
-
-func exclude(src []string, bad ...string) []string {
-	if len(src) == 0 {
-		return src
-	}
-	skip := make(map[string]struct{}, len(bad))
-	for _, b := range bad {
-		skip[b] = struct{}{}
-	}
-	out := make([]string, 0, len(src))
-	for _, s := range src {
-		if _, ok := skip[s]; !ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }
