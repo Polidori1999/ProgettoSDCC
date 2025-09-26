@@ -21,6 +21,8 @@ type ServiceRegistry struct {
 	localEpoch    int64
 	localVersion  uint64
 	remoteMeta    map[string]svcMeta // provider -> (epoch,ver)
+	tombMeta      map[string]svcMeta // peer -> (epoch,version) al momento della tombstone
+
 }
 type svcMeta struct {
 	Epoch   int64
@@ -32,6 +34,7 @@ func NewServiceRegistry() *ServiceRegistry {
 		Table:      make(map[string]map[string]time.Time),
 		localEpoch: time.Now().UnixNano(),
 		remoteMeta: make(map[string]svcMeta),
+		tombMeta:   make(map[string]svcMeta), // NEW
 	}
 }
 
@@ -241,4 +244,26 @@ func (sr *ServiceRegistry) ResetRemoteMeta(provider string) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	delete(sr.remoteMeta, provider)
+}
+
+func (sr *ServiceRegistry) SaveTombMeta(peer string, epoch int64, ver uint64) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	sr.tombMeta[peer] = svcMeta{Epoch: epoch, Version: ver}
+}
+
+func (sr *ServiceRegistry) TombMeta(peer string) (int64, uint64, bool) {
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	tm, ok := sr.tombMeta[peer]
+	if !ok {
+		return 0, 0, false
+	}
+	return tm.Epoch, tm.Version, true
+}
+
+func (sr *ServiceRegistry) ClearTombMeta(peer string) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	delete(sr.tombMeta, peer)
 }
