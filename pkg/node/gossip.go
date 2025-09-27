@@ -17,10 +17,12 @@ type GossipManager struct {
 	// rnd è il generatore casuale locale
 	rnd *rand.Rand
 	// NEW
-	stopCh  chan struct{}
-	lightT  *time.Ticker
-	fullT   *time.Ticker
-	hintIdx int
+	stopCh     chan struct{}
+	lightT     *time.Ticker
+	fullT      *time.Ticker
+	hintIdx    int
+	lightEvery time.Duration
+	fullEvery  time.Duration
 }
 
 // NewGossipManager ora riceve un generatore *rand.Rand
@@ -35,11 +37,16 @@ func NewGossipManager(pm *PeerManager, reg *ServiceRegistry, selfID string, r *r
 
 func (gm *GossipManager) Start() {
 	if gm.stopCh != nil {
-		return
-	} // già avviato
+		return // già avviato
+	}
+	// Niente default hardcoded: devono essere impostati via SetHeartbeatIntervals
+	if gm.lightEvery <= 0 || gm.fullEvery <= 0 {
+		panic("GossipManager: heartbeat intervals not set (call SetHeartbeatIntervals before Start)")
+	}
+
 	gm.stopCh = make(chan struct{})
-	gm.lightT = time.NewTicker(2 * time.Second)
-	gm.fullT = time.NewTicker(15 * time.Second)
+	gm.lightT = time.NewTicker(gm.lightEvery)
+	gm.fullT = time.NewTicker(gm.fullEvery)
 
 	go func(stop <-chan struct{}) {
 		defer func() {
@@ -152,4 +159,13 @@ func (gm *GossipManager) peerHints(max int) []string {
 		out = append(out, all[(start+i)%n])
 	}
 	return out
+}
+
+func (g *GossipManager) SetHeartbeatIntervals(light, full time.Duration) {
+	if light > 0 {
+		g.lightEvery = light
+	}
+	if full > 0 {
+		g.fullEvery = full
+	}
 }

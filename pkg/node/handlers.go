@@ -4,7 +4,6 @@ import (
 	"ProgettoSDCC/pkg/proto"
 	"fmt"
 	"log"
-	"net"
 	"strings"
 	"time"
 )
@@ -13,7 +12,7 @@ import (
 //  Helper condiviso (revival)
 // =============================
 
-// applyRevivalIfNewer gestisce la guardia tombstone: se il meta remoto (epoch,ver)
+// gestisce la guardia tombstone: se il meta remoto (epoch,ver)
 // è più nuovo del tombstone salvato, pulisce lo stato locale relativo al peer
 // (dead/leave/suspect visti) e unsuppress sul FailureDetector.
 // Ritorna true se si può applicare normalmente l’HB; false se va ignorato.
@@ -35,11 +34,12 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 				delete(n.seenSuspect, id)
 			}
 		}
-		for id := range n.seenDead {
+		for id := range n.deadSeenCnt {
 			if strings.HasPrefix(id, "dead|"+peer+"|") {
-				delete(n.seenDead, id)
+				delete(n.deadSeenCnt, id)
 			}
 		}
+
 		n.rumorMu.Unlock()
 
 		n.FailureD.UnsuppressPeer(peer)
@@ -52,9 +52,12 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 //  Handler: REPAIR request
 // =============================
 
-// handleRepairReq invia indietro un Heartbeat full con la vista locale.
+// invia indietro un Heartbeat full con la vista locale.
 func (n *Node) handleRepairReq(env proto.Envelope) {
-	_, _ = proto.DecodeRepairReq(env.Data)
+	if _, err := proto.DecodePayload[proto.RepairReq](env.Data); err != nil {
+		// payload malformato: ignoro
+		return
+	}
 	resp := proto.Heartbeat{
 		Epoch:    n.Registry.LocalEpoch(),
 		SvcVer:   n.Registry.LocalVersion(),
@@ -164,8 +167,8 @@ func (n *Node) handleHeartbeatFull(env proto.Envelope, hb proto.Heartbeat) {
 //  Handler: Lookup (deleghe)
 // =============================
 
-func (n *Node) handleLookup(env proto.Envelope, lm *LookupManager, srcAddr *net.UDPAddr) {
-	lm.HandleRequest(env, srcAddr)
+func (n *Node) handleLookup(env proto.Envelope, lm *LookupManager) {
+	lm.HandleRequest(env)
 }
 
 func (n *Node) handleLookupResponse(env proto.Envelope, lm *LookupManager) {
@@ -246,19 +249,13 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 	if r.TTL > 0 {
 		r.TTL--
 		outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
-		peers := exclude(n.alivePeers(), env.From, r.Peer) // solo vivi
-		B := int(r.Fanout)
-		if B < 1 {
-			B = 1
-		}
-		if B > len(peers) {
-			B = len(peers)
-		}
-		for _, p := range randomSubset(peers, B, n.GossipM.rnd) {
+		targets := n.pickTargets(exclude(n.alivePeers(), env.From, r.Peer), int(r.Fanout))
+		for _, p := range targets {
 			n.GossipM.SendUDP(outS, p)
 		}
-		log.Printf("fwd SUSPECT %s TTL=%d B=%d seen=%d/%d", r.Peer, r.TTL, B, cnt, r.MaxFw)
+		log.Printf("fwd SUSPECT %s TTL=%d B=%d seen=%d/%d", r.Peer, r.TTL, len(targets), cnt, r.MaxFw)
 	}
+
 }
 
 // =============================
@@ -307,27 +304,13 @@ func (n *Node) handleDead(env proto.Envelope, d proto.DeadRumor) {
 	if d.TTL > 0 {
 		d.TTL--
 		outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-
-		peers := n.alivePeers()
-		filtered := make([]string, 0, len(peers))
-		for _, p := range peers {
-			if p != env.From && p != d.Peer {
-				filtered = append(filtered, p)
-			}
-		}
-
-		B := int(d.Fanout)
-		if B < 1 {
-			B = 1
-		}
-		if B > len(filtered) {
-			B = len(filtered)
-		}
-		for _, p := range randomSubset(filtered, B, n.GossipM.rnd) {
+		targets := n.pickTargets(exclude(n.alivePeers(), env.From, d.Peer), int(d.Fanout))
+		for _, p := range targets {
 			n.GossipM.SendUDP(outD, p)
 		}
-		log.Printf("fwd DEAD %s TTL=%d B=%d seen=%d/%d", d.Peer, d.TTL, B, cnt, d.MaxFw)
+		log.Printf("fwd DEAD %s TTL=%d B=%d seen=%d/%d", d.Peer, d.TTL, len(targets), cnt, d.MaxFw)
 	}
+
 }
 
 // =============================
@@ -372,17 +355,11 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 	if lv.TTL > 0 {
 		lv.TTL--
 		outL, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
-		peers := exclude(n.alivePeers(), env.From, peer)
-		B := int(lv.Fanout)
-		if B < 1 {
-			B = 1
-		}
-		if B > len(peers) {
-			B = len(peers)
-		}
-		for _, p := range randomSubset(peers, B, n.GossipM.rnd) {
+		targets := n.pickTargets(exclude(n.alivePeers(), env.From, peer), int(lv.Fanout))
+		for _, p := range targets {
 			n.GossipM.SendUDP(outL, p)
 		}
-		log.Printf("fwd LEAVE %s TTL=%d B=%d seen=%d/%d", peer, lv.TTL, B, cnt, lv.MaxFw)
+		log.Printf("fwd LEAVE %s TTL=%d B=%d seen=%d/%d", peer, lv.TTL, len(targets), cnt, lv.MaxFw)
 	}
+
 }

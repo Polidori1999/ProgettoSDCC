@@ -25,20 +25,16 @@ type Node struct {
 	Port     int
 
 	// rumor tracking for quorum-based failure detector
-	suspectCount map[string]int  // peer → numero di rumor sospetti visti
-	seenSuspect  map[string]bool // rumorID sospetti già visti
-	seenDead     map[string]bool // rumorID dead già visti
-
+	suspectCount    map[string]int   // peer → numero di rumor sospetti visti
+	seenSuspect     map[string]bool  // rumorID sospetti già visti
 	deadSeenCnt     map[string]uint8 // ← NUOVO: rumorID → quante volte l'ho visto
 	suspectSeenCnt  map[string]uint8
 	leaveSeenCnt    map[string]uint8
-	quorumThreshold int             // soglia di quorum per confermare dead
-	initialSeeds    []string        // i seed passati in --peers
+	quorumThreshold int             // soglia di quorum per confermare dead 	// i seed passati in --peers
 	seenLeave       map[string]bool // peer → già processato Leave
 	handledDead     map[string]bool
 	udpConn         *net.UDPConn
 	done            chan struct{}
-	gossipTicker    *time.Ticker
 	shutdownOnce    sync.Once
 
 	//track connessione tcp
@@ -62,7 +58,6 @@ type Node struct {
 	learnFromLookup bool   // se false, pure gossip discovery
 
 	// parametri modalità FD
-	fdMode        string // "ttl" | "gossip"
 	fdB, fdF, fdT int
 }
 
@@ -97,7 +92,6 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	n := &Node{
 		PeerMgr:  pm,
 		Registry: reg,
-		//Digests:  dm,
 		GossipM:  gm,
 		FailureD: fd,
 		ID:       id,
@@ -105,32 +99,31 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 
 		suspectCount: make(map[string]int),
 		seenSuspect:  make(map[string]bool),
-		seenDead:     make(map[string]bool),
 
 		deadSeenCnt:     make(map[string]uint8), // ← init
 		handledDead:     make(map[string]bool),
 		quorumThreshold: quorum,
-		initialSeeds:    seeds,
 		seenLeave:       make(map[string]bool),
 		done:            make(chan struct{}), // globale cosi non lo
 		rpcConns:        make(map[net.Conn]struct{}),
-		rpcA:            18, // default sensati, sovrascrivibili dal main
-		rpcB:            3,
-		lookupTTL:       DefaultLookupTTL,
-		maxTTL:          20,
-		lookupMode:      "ttl",
-		learnFromLookup: true,
-		suspectSeenCnt:  make(map[string]uint8),
-		leaveSeenCnt:    make(map[string]uint8),
+
+		suspectSeenCnt: make(map[string]uint8),
+		leaveSeenCnt:   make(map[string]uint8),
 
 		// parametri gossip FD (usa questi come default fissi)
-		fdMode: "gossip", // se non ti interessa più il confronto
-		fdB:    3, fdF: 2, fdT: 3,
+
 	}
 	// calcola il quorum basato su peer iniziali + me
 	fd.SetGossipParams(n.fdB, n.fdF, n.fdT)
 	n.updateQuorum()
 	return n
+}
+
+func (n *Node) SetGossipParams(B, F, T int) {
+	n.fdB, n.fdF, n.fdT = B, F, T
+	if n.FailureD != nil {
+		n.FailureD.SetGossipParams(B, F, T)
+	}
 }
 
 func (n *Node) SetLookupTTL(ttl int) {
@@ -185,14 +178,6 @@ func (n *Node) EnableRepair(enabled bool, every time.Duration) {
 	n.repairEvery = every
 }
 
-func (pm *PeerManager) LearnFromPiggyback(peer string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	if !pm.Peers[peer] {
-		pm.Peers[peer] = true
-	}
-}
-
 // imposta i parametri A e B usati nelle invocazioni RPC
 func (n *Node) SetRPCParams(a, b float64) {
 	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
@@ -236,9 +221,6 @@ func (n *Node) Shutdown() {
 		}
 		if n.FailureD != nil {
 			n.FailureD.Stop()
-		}
-		if n.gossipTicker != nil {
-			n.gossipTicker.Stop()
 		}
 
 		// Segnala done
@@ -326,7 +308,7 @@ func (n *Node) Run(lookupSvc string) {
 	if err != nil {
 		log.Fatalf("ListenUDP: %v", err)
 	}
-	lm := NewLookupManager(n.PeerMgr, n.Registry, n.GossipM, conn)
+	lm := NewLookupManager(n.PeerMgr, n.Registry, n.GossipM)
 	lm.SetLearnFromResponses(n.learnFromLookup)
 
 	n.udpConn = conn
@@ -341,7 +323,7 @@ func (n *Node) Run(lookupSvc string) {
 			case <-n.done:
 				return
 			default:
-				nRead, srcAddr, err := conn.ReadFromUDP(buf)
+				nRead, _, err := conn.ReadFromUDP(buf)
 				if err != nil {
 					if strings.Contains(err.Error(), "closed network connection") {
 						return
@@ -360,33 +342,33 @@ func (n *Node) Run(lookupSvc string) {
 					n.handleRepairReq(env)
 
 				case proto.MsgHeartbeatLight:
-					if hbd, err := proto.DecodeHeartbeatLight(env.Data); err == nil {
+					if hbd, err := proto.DecodePayload[proto.HeartbeatLight](env.Data); err == nil {
 						n.handleHeartbeatLight(env, hbd)
 					}
 
 				case proto.MsgHeartbeat:
-					if hb, err := proto.DecodeHeartbeat(env.Data); err == nil {
+					if hb, err := proto.DecodePayload[proto.Heartbeat](env.Data); err == nil {
 						n.handleHeartbeatFull(env, hb)
 					}
 
 				case proto.MsgLookup:
-					n.handleLookup(env, lm, srcAddr)
+					n.handleLookup(env, lm)
 
 				case proto.MsgLookupResponse:
 					n.handleLookupResponse(env, lm)
 
 				case proto.MsgSuspect:
-					if r, err := proto.DecodeSuspectRumor(env.Data); err == nil {
+					if r, err := proto.DecodePayload[proto.SuspectRumor](env.Data); err == nil {
 						n.handleSuspect(env, r)
 					}
 
 				case proto.MsgDead:
-					if d, err := proto.DecodeDeadRumor(env.Data); err == nil {
+					if d, err := proto.DecodePayload[proto.DeadRumor](env.Data); err == nil {
 						n.handleDead(env, d)
 					}
 
 				case proto.MsgLeave:
-					if lv, err := proto.DecodeLeave(env.Data); err == nil {
+					if lv, err := proto.DecodePayload[proto.Leave](env.Data); err == nil {
 						n.handleLeave(env, lv)
 					}
 
@@ -423,9 +405,6 @@ func (n *Node) Run(lookupSvc string) {
 			if ttl < 2 {
 				ttl = 2
 			} // 1 hop spesso è poco
-			const fanout = 3 // B
-			const maxfw = 2  // F
-
 			reqID := lm.LookupGossip(lookupSvc, ttl, n.fdB, n.fdF)
 			log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, n.fdB, n.fdF)
 

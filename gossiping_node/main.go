@@ -1,6 +1,8 @@
 package main
 
 import (
+	"ProgettoSDCC/pkg/config"
+	"ProgettoSDCC/pkg/node"
 	"bufio"
 	"flag"
 	"fmt"
@@ -9,8 +11,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"ProgettoSDCC/pkg/node"
 )
 
 // fetchRegistryPeers contatta il registry e restituisce i peer
@@ -77,73 +77,90 @@ func fetchRegistryPeers(regAddr, myID string) []string {
 func main() {
 	idFlag := flag.String("id", "", "host:port")
 	portFlag := flag.Int("port", 8000, "UDP listen port")
-	svcFlag := flag.String("services", "", "comma-separated services")
+
 	registryFlag := flag.String("registry", "", "host:port del service registry")
 	lookupFlag := flag.String("lookup", "", "service lookup then exit")
-	lookupModeFlag := flag.String("lookup-mode", "ttl", "lookup mode: ttl | gossip")
-	pureGossipFlag := flag.Bool("pure-gossip-discovery", false, "do not learn providers from lookup responses")
 
-	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup")    // (al momento non usato da Node.Run)
-	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup") // (al momento non usato da Node.Run)
+	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup (storico)")    // non usato ora
+	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup (storico)") // non usato ora
 
-	// in main()
-	repairFlag := flag.Bool("repair", false, "Enable periodic push–pull repair")
-	repairEveryFlag := flag.Duration("repair-every", 30*time.Second, "Repair tick period (e.g., 30s)")
-
-	// >>> nuovi flag per i parametri RPC
-	rpcAFlag := flag.Float64("rpc-a", 18, "Parametro A per l'RPC (float64)")
-	rpcBFlag := flag.Float64("rpc-b", 3, "Parametro B per l'RPC (float64)")
-
-	//piggyBackFlag := flag.Int("piggyBack", 2, "Parametro Piggy Back per heartbeat light")
-	svcCtrlFlag := flag.String("svc-ctrl", "", "file di controllo servizi (comandi: 'ADD <svc>' / 'DEL <svc>')")
+	peersFlag := flag.String("peers", "", "comma-separated initial peers (host:port)")
+	servicesFlag := flag.String("services", "", "comma-separated local services")
 
 	_ = ttlFlag
 	_ = fanoutFlag
 	flag.Parse()
 
+	// ID di default: <hostname>:<port>
 	if *idFlag == "" {
 		h, _ := os.Hostname()
 		*idFlag = fmt.Sprintf("%s:%d", h, *portFlag)
 	}
+	id := *idFlag
+	lookupSvc := strings.TrimSpace(*lookupFlag)
 
 	// Bootstrap via registry (se presente)
 	var peerList []string
 	if *registryFlag != "" {
-		if *lookupFlag != "" {
+		if lookupSvc != "" {
 			log.Printf("[INFO] Lookup mode: bootstrap dal registry %s", *registryFlag)
 		} else {
 			log.Printf("[DBG] Bootstrapping dal registry %s…", *registryFlag)
 		}
-		peerList = fetchRegistryPeers(*registryFlag, *idFlag)
+		peerList = fetchRegistryPeers(*registryFlag, id)
 		log.Printf("[DBG] Peer iniziali dal registry: %v", peerList)
 		if len(peerList) == 0 {
 			log.Printf("[WARN] Nessun peer restituito dal registry (continuo comunque)")
 		}
 	}
 
-	// >>> Unico code path: crea il nodo e fai partire Run
-	n := node.NewNodeWithID(*idFlag, strings.Join(peerList, ","), *svcFlag)
-	n.EnableRepair(*repairFlag, *repairEveryFlag)
-	n.SetRPCParams(*rpcAFlag, *rpcBFlag)
-	n.SetLookupTTL(*ttlFlag) // TTL per la modalità TTL
-
-	n.SetLookupMode(*lookupModeFlag)       // "ttl" (default) | "gossip"
-	n.SetLearnFromLookup(!*pureGossipFlag) // false => pure gossip discovery
-
-	if *svcCtrlFlag != "" {
-		go watchSvcControlFile(n, *svcCtrlFlag)
+	// peers iniziali:
+	// - se il registry ha dato qualcosa, usiamo quelli
+	// - altrimenti (o in aggiunta) usiamo --peers
+	peersCSV := strings.TrimSpace(*peersFlag)
+	if len(peerList) > 0 {
+		peersCSV = strings.Join(peerList, ",")
 	}
 
-	if *lookupFlag != "" {
-		log.Printf("[MODE] client lookup=%s", *lookupFlag)
-		n.Run(*lookupFlag) // ← QUI fa: lm.Lookup + attesa risposta + shutdown su successo/timeout
-		return
-	}
+	// servizi locali (opzionali)
+	svcsCSV := strings.TrimSpace(*servicesFlag)
 
-	n.Run("") // nodo normale
+	// Carica config da .env (niente hardcoded)
+	cfg := config.Load()
+	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d lookup=%s ttl=%d learn=%t repair=%v/%v RPC=(%.2f,%.2f)",
+		cfg.HBLightEvery, cfg.HBFullEvery, cfg.SuspectTimeout, cfg.DeadTimeout,
+		cfg.FDB, cfg.FDF, cfg.FDT, cfg.LookupMode, cfg.LookupTTL, cfg.LearnFromLookup,
+		cfg.RepairEnabled, cfg.RepairEvery, cfg.RPCA, cfg.RPCB)
+
+	// Crea nodo
+	n := node.NewNodeWithID(id, peersCSV, svcsCSV)
+
+	// Parametri gossip rumor (B/F/T) → sia Node che FailureDetector
+	n.SetGossipParams(cfg.FDB, cfg.FDF, cfg.FDT)
+
+	// Intervalli heartbeat per il GossipManager (devono essere settati prima di Run)
+	n.GossipM.SetHeartbeatIntervals(cfg.HBLightEvery, cfg.HBFullEvery)
+
+	// Timeouts del FailureDetector (suspect / dead)
+	n.FailureD.SetTimeouts(cfg.SuspectTimeout, cfg.DeadTimeout)
+
+	// Lookup / Repair policy
+	n.SetLookupMode(cfg.LookupMode)
+	n.SetLookupTTL(cfg.LookupTTL)
+	n.SetLearnFromLookup(cfg.LearnFromLookup)
+	n.EnableRepair(cfg.RepairEnabled, cfg.RepairEvery)
+
+	// Parametri RPC per i servizi aritmetici
+	n.SetRPCParams(cfg.RPCA, cfg.RPCB)
+
+	// (opzionale) watcher del file comandi servizi
+	go watchSvcControlFile(n, "/tmp/services.ctrl")
+
+	// Avvio
+	n.Run(lookupSvc)
 }
 
-// Commenti in italiano: osserva un file e applica comandi "ADD <svc>" / "DEL <svc>".
+// Osserva un file e applica comandi "ADD <svc>" / "DEL <svc>".
 // Semplice polling: appendi righe al file montato nel container.
 func watchSvcControlFile(n *node.Node, path string) {
 	// assicurati che il file esista

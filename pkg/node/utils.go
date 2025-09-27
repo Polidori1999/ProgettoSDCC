@@ -32,3 +32,18 @@ func exclude(src []string, bad ...string) []string {
 	}
 	return out
 }
+
+// scelgo fino a B target dai peers; garantisco B>=1 e B<=len(peers).
+// se peers è vuoto → ritorna nil.
+func (n *Node) pickTargets(peers []string, B int) []string {
+	if len(peers) == 0 {
+		return nil
+	}
+	if B < 1 {
+		B = 1
+	}
+	if B > len(peers) {
+		B = len(peers)
+	}
+	return randomSubset(peers, B, n.GossipM.rnd)
+}

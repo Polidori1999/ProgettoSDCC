@@ -79,3 +79,11 @@ func (pm *PeerManager) SnapshotLastSeen() map[string]time.Time {
 	}
 	return cp
 }
+
+func (pm *PeerManager) LearnFromPiggyback(peer string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if !pm.Peers[peer] {
+		pm.Peers[peer] = true
+	}
+}

@@ -79,7 +79,7 @@ func (sr *ServiceRegistry) AddLocal(selfID, svcCSV string) {
 	}
 }
 
-// LocalServices restituisce **una copia** della slice (per sicurezza).
+// restituisce **una copia** della slice (per sicurezza).
 func (sr *ServiceRegistry) LocalServices() []string {
 	sr.mu.RLock()
 	defer sr.mu.RUnlock()
@@ -89,7 +89,7 @@ func (sr *ServiceRegistry) LocalServices() []string {
 	return dup
 }
 
-// Update: usato quando si riceve info da fuori (HB o anti-entropy).
+// usato quando si riceve info da fuori (HB o anti-entropy).
 func (sr *ServiceRegistry) Update(provider string, services []string) {
 	now := time.Now()
 	sr.mu.Lock()

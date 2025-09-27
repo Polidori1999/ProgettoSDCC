@@ -8,10 +8,17 @@ import (
 	"time"
 )
 
+// Parametri gossip (B,F,T) incapsulati
+type RumorParams struct {
+	Fanout      int // B
+	MaxForwards int // F
+	TTL         int // T
+}
+
 type FailureDetector struct {
 	mu             sync.Mutex
 	peers          *PeerManager
-	reg            *ServiceRegistry
+	reg            *ServiceRegistry // può restare anche se non usata
 	gossip         *GossipManager
 	suspectTimeout time.Duration
 	failTimeout    time.Duration
@@ -19,33 +26,39 @@ type FailureDetector struct {
 	suspected  map[string]bool // peer → già gossipato SuspectRumor
 	suppressed map[string]bool // peer → già gossipato DeadRumor / rimosso
 
-	// NEW: canale di stop per chiudere la goroutine pulitamente
 	stopCh  chan struct{}
 	fanoutB int
 	maxFwF  int
 	ttlT    int
 }
 
+func clampByteRange(x int) int {
+	if x < 1 {
+		return 1
+	}
+	if x > 255 {
+		return 255
+	}
+	return x
+}
+
+func (fd *FailureDetector) SetRumorParams(p RumorParams) {
+	fd.mu.Lock()
+	fd.fanoutB = clampByteRange(p.Fanout)
+	fd.maxFwF = clampByteRange(p.MaxForwards)
+	fd.ttlT = clampByteRange(p.TTL)
+	fd.mu.Unlock()
+}
+
+// Back-compat col codice esistente
 func (fd *FailureDetector) SetGossipParams(B, F, T int) {
-	if B < 1 {
-		B = 1
-	}
-	if B > 255 {
-		B = 255
-	}
-	if F < 1 {
-		F = 1
-	}
-	if F > 255 {
-		F = 255
-	}
-	if T < 1 {
-		T = 1
-	}
-	if T > 255 {
-		T = 255
-	}
-	fd.fanoutB, fd.maxFwF, fd.ttlT = B, F, T
+	fd.SetRumorParams(RumorParams{Fanout: B, MaxForwards: F, TTL: T})
+}
+
+func (fd *FailureDetector) Params() RumorParams {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	return RumorParams{fd.fanoutB, fd.maxFwF, fd.ttlT}
 }
 
 func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager, suspectT, failT time.Duration) *FailureDetector {
@@ -57,7 +70,6 @@ func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager
 		failTimeout:    failT,
 		suspected:      make(map[string]bool),
 		suppressed:     make(map[string]bool),
-		// stopCh viene creato in Start() per permettere eventuali ri-avvii
 	}
 }
 
@@ -79,14 +91,54 @@ func (fd *FailureDetector) UnsuppressPeer(peer string) {
 	fd.peers.Seen(peer)
 }
 
-// S avvia il monitoraggio dei peer, gossippando SuspectRumor.
-// NEW: versione con select su ticker e stopCh.
+// helper: emetti un SuspectRumor con i parametri correnti
+func (fd *FailureDetector) emitSuspect(peer string, now time.Time) {
+	p := fd.Params()
+
+	rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
+	sr := proto.SuspectRumor{
+		RumorID: rumorID,
+		Peer:    peer,
+		Fanout:  uint8(p.Fanout),
+		MaxFw:   uint8(p.MaxForwards),
+		TTL:     uint8(p.TTL),
+	}
+	out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
+	if err != nil {
+		return
+	}
+
+	// targets = tutti i peer tranne il sospetto
+	all := fd.peers.List()
+	filtered := make([]string, 0, len(all))
+	for _, x := range all {
+		if x != peer {
+			filtered = append(filtered, x)
+		}
+	}
+
+	B := p.Fanout
+	if B < 1 {
+		B = 1
+	}
+	if B > len(filtered) {
+		B = len(filtered)
+	}
+	for _, to := range randomSubset(filtered, B, fd.gossip.rnd) {
+		fd.gossip.SendUDP(out, to)
+	}
+	log.Printf("[FD] SUSPECT GOSSIP %s B=%d F=%d TTL=%d targets=%v", peer, p.Fanout, p.MaxForwards, p.TTL, filtered)
+
+	// self-vote via loopback (fa scattare subito il tuo handler MsgSuspect nel Node)
+	fd.gossip.SendUDP(out, fd.gossip.self)
+}
+
+// Avvia il monitoraggio dei peer, gossippando SuspectRumor.
 func (fd *FailureDetector) Start() {
 	fd.mu.Lock()
 	if fd.stopCh != nil {
-		// già in esecuzione
 		fd.mu.Unlock()
-		return
+		return // già in esecuzione
 	}
 	ch := make(chan struct{})
 	fd.stopCh = ch
@@ -99,29 +151,30 @@ func (fd *FailureDetector) Start() {
 		for {
 			select {
 			case now := <-ticker.C:
-				snap := fd.peers.SnapshotLastSeen() // <<< copia consistente
+				snap := fd.peers.SnapshotLastSeen() // copia consistente
 				for peer, last := range snap {
+					// salta se soppresso
 					fd.mu.Lock()
-					if fd.suppressed[peer] {
-						fd.mu.Unlock()
+					supp := fd.suppressed[peer]
+					fd.mu.Unlock()
+					if supp {
 						continue
 					}
-					fd.mu.Unlock()
 
 					age := now.Sub(last)
 
-					// 1) se è rientrato (< suspectTimeout), resettiamo lo stato
+					// 1) rientrato (< suspectTimeout) → reset stato SUSPECT
 					if age <= fd.suspectTimeout {
 						fd.mu.Lock()
 						if fd.suspected[peer] {
 							delete(fd.suspected, peer)
-							log.Printf("Peer %s OK (rientrato dal SUSPECT)", peer) // facoltativo ma utile
+							log.Printf("Peer %s OK (rientrato dal SUSPECT)", peer)
 						}
 						fd.mu.Unlock()
 						continue
 					}
 
-					// 2) fase di SUSPECT
+					// 2) finestra SUSPECT: (suspectTimeout, failTimeout]
 					if age > fd.suspectTimeout && age <= fd.failTimeout {
 						fd.mu.Lock()
 						first := !fd.suspected[peer]
@@ -132,65 +185,38 @@ func (fd *FailureDetector) Start() {
 
 						if first {
 							log.Printf("Peer %s SUSPICIOUS (no heartbeat for %v)", peer, age)
-
-							rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
-							sr := proto.SuspectRumor{
-								RumorID: rumorID,
-								Peer:    peer,
-								Fanout:  uint8(fd.fanoutB), // B
-								MaxFw:   uint8(fd.maxFwF),  // F
-								TTL:     uint8(fd.ttlT),    // T
-							}
-							out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
-							if err == nil {
-								// targets = tutti i peer tranne il sospetto
-								all := fd.peers.List()
-								filtered := make([]string, 0, len(all))
-								for _, p := range all {
-									if p != peer {
-										filtered = append(filtered, p)
-									}
-								}
-
-								// fanout B fisso (gossip), non k=log N
-								B := fd.fanoutB
-								if B < 1 {
-									B = 1
-								}
-								if B > len(filtered) {
-									B = len(filtered)
-								}
-
-								for _, p := range randomSubset(filtered, B, fd.gossip.rnd) {
-									fd.gossip.SendUDP(out, p)
-								}
-								log.Printf("[FD] SUSPECT GOSSIP %s B=%d F=%d TTL=%d targets=%v",
-									peer, fd.fanoutB, fd.maxFwF, fd.ttlT, filtered)
-
-								// self-vote via loopback (fa scattare subito il tuo handler MsgSuspect)
-								fd.gossip.SendUDP(out, fd.gossip.self)
-							}
-							continue
+							fd.emitSuspect(peer, now)
 						}
-
 						continue
 					}
+
+					// 3) oltre failTimeout → qui non facciamo nulla:
+					// la conferma DEAD viene decisa via quorum nel Node.
 				}
 
 			case <-stop:
-				// richiesta di stop
 				return
 			}
 		}
 	}(ch)
 }
 
-// NEW:  ferma la goroutine del failure detector
+// Ferma la goroutine del failure detector
 func (fd *FailureDetector) Stop() {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	if fd.stopCh != nil {
 		close(fd.stopCh)
 		fd.stopCh = nil
+	}
+}
+
+// Imposta i timeouts (SUSPECT/FAIL) a runtime
+func (fd *FailureDetector) SetTimeouts(suspect, fail time.Duration) {
+	if suspect > 0 {
+		fd.suspectTimeout = suspect
+	}
+	if fail > 0 {
+		fd.failTimeout = fail
 	}
 }

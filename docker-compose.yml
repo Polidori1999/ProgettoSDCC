@@ -1,3 +1,8 @@
+x-node-common: &node-common
+  build: .
+  stop_signal: SIGTERM
+  depends_on: [registry]
+  env_file: [.env]
 
 services:
   registry:
@@ -5,93 +10,42 @@ services:
       context: ./registry
       dockerfile: Dockerfile
     container_name: registry
-    ports:
-      - "9000:9000"
+    ports: ["9000:9000"]
 
   node1:
-    build: .
+    <<: *node-common
     container_name: node1
-    stop_signal: SIGTERM
-    depends_on: [registry]
-    command:
-      - "--id=node1:9001"
-      - "--port=9001"
-      - "--registry=registry:9000"
-      - "--services="
-      - "--svc-ctrl=/tmp/services.ctrl"
-    ports:
-      - "9001:9001/udp"
-
+    command: ["--id=node1:9001","--port=9001","--registry=registry:9000","--services="]
+    ports: ["9001:9001/udp"]
 
   node2:
-    build: .
+    <<: *node-common
     container_name: node2
-    stop_signal: SIGTERM
-    depends_on: [registry]
-    command:
-      - "--id=node2:9002"
-      - "--port=9002"
-      - "--registry=registry:9000"
-      - "--services=sub"
-      - "--svc-ctrl=/tmp/services.ctrl"
-    ports:
-      - "9002:9002/udp"
+    command: ["--id=node2:9002","--port=9002","--registry=registry:9000","--services=sub"]
+    ports: ["9002:9002/udp"]
 
   node3:
-    build: .
+    <<: *node-common
     container_name: node3
-    stop_signal: SIGTERM
-    depends_on: [registry]
-    command:
-      - "--id=node3:9003"
-      - "--port=9003"
-      - "--registry=registry:9000"
-      - "--services=div"
-      - "--svc-ctrl=/tmp/services.ctrl"
-    ports:
-      - "9003:9003/udp"
+    command: ["--id=node3:9003","--port=9003","--registry=registry:9000","--services=div"]
+    ports: ["9003:9003/udp"]
 
   node4:
-    build: .
+    <<: *node-common
     container_name: node4
-    stop_signal: SIGTERM
-    depends_on: [registry]
-    command:
-      - "--id=node4:9004"
-      - "--port=9004"
-      - "--registry=registry:9000"
-      - "--services=mul"
-      - "--svc-ctrl=/tmp/services.ctrl"
-    ports:
-      - "9004:9004/udp"
+    command: ["--id=node4:9004","--port=9004","--registry=registry:9000","--services=mul"]
+    ports: ["9004:9004/udp"]
 
   node5:
-    build: .
+    <<: *node-common
     container_name: node5
-    stop_signal: SIGTERM
-    depends_on: [registry]
-    command:
-      - "--id=node5:9005"
-      - "--port=9005"
-      - "--registry=registry:9000"
-      - "--services=sub"
-      - "--svc-ctrl=/tmp/services.ctrl"
-    ports:
-      - "9005:9005/udp"
+    command: ["--id=node5:9005","--port=9005","--registry=registry:9000","--services=sub"]
+    ports: ["9005:9005/udp"]
 
   client:
-    build: .
-    container_name: client                 # ← prima era "lookup"
-    stop_signal: SIGTERM
+    <<: *node-common
+    container_name: client
     depends_on: [registry, node1, node2, node3, node4, node5]
     entrypoint: ["gossip-node"]
-    command:
-      - "--id=client:9009"                 # ← host "client" = nome container
-      - "--port=9009"
-      - "--registry=registry:9000"         # introducer unicamente per bootstrap
-      - "--lookup=sub"
-      - "--lookup-mode=gossip"
-      #- "--ttl=3"                          # TTL della ricerca
-    ports:
-      - "9009:9009/udp"
-
+    command: ["--id=client:9009","--port=9009","--registry=registry:9000","--lookup=sub"]
+    ports: ["9009:9009/udp"]
