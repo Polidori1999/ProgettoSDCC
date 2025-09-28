@@ -34,6 +34,8 @@ func NewLookupManager(pm *PeerManager, sr *ServiceRegistry, gm *GossipManager) *
 	}
 }
 
+// SetLearnFromResponses abilita/disabilita il learning dalla LookupResponse.
+// Se false, il nodo originante NON memorizza servizio→provider.
 func (lm *LookupManager) SetLearnFromResponses(v bool) { lm.learnFromResponses = v }
 
 // avvia una ricerca per `service` con TTL iniziale `ttl`.
@@ -224,6 +226,12 @@ func (lm *LookupManager) HandleResponse(env proto.Envelope) {
 		return // evita update “vuoti”
 	}
 
-	lm.reg.Update(lrsp.Provider, []string{service})
-	log.Printf("  -> registry updated: %s → %s", service, lrsp.Provider)
+	if lm.learnFromResponses {
+		// aggiorna la mappa servizio→provider SOLO se abilitato
+		lm.reg.Update(lrsp.Provider, []string{service})
+		log.Printf("  -> registry updated: %s → %s", service, lrsp.Provider)
+	} else {
+		// learning disattivato: niente caching dal lato origin
+		log.Printf("  -> learning-from-lookup DISABILITATO: salto update per %s", service)
+	}
 }

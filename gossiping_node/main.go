@@ -86,6 +86,7 @@ func main() {
 
 	peersFlag := flag.String("peers", "", "comma-separated initial peers (host:port)")
 	servicesFlag := flag.String("services", "", "comma-separated local services")
+	svcCtrlFlag := flag.String("svc-ctrl", "", "Path del file di controllo servizi (opzionale)")
 
 	_ = ttlFlag
 	_ = fanoutFlag
@@ -127,9 +128,8 @@ func main() {
 
 	// Carica config da .env (niente hardcoded)
 	cfg := config.Load()
-	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d lookup=%s ttl=%d learn=%t repair=%v/%v RPC=(%.2f,%.2f)",
-		cfg.HBLightEvery, cfg.HBFullEvery, cfg.SuspectTimeout, cfg.DeadTimeout,
-		cfg.FDB, cfg.FDF, cfg.FDT, cfg.LookupMode, cfg.LookupTTL, cfg.LearnFromLookup,
+	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d lookup=%s ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f)", cfg.HBLightEvery, cfg.HBFullEvery, cfg.SuspectTimeout, cfg.DeadTimeout,
+		cfg.FDB, cfg.FDF, cfg.FDT, cfg.LookupMode, cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
 		cfg.RepairEnabled, cfg.RepairEvery, cfg.RPCA, cfg.RPCB)
 
 	// Crea nodo
@@ -152,8 +152,12 @@ func main() {
 
 	// Parametri RPC per i servizi aritmetici
 	n.SetRPCParams(cfg.RPCA, cfg.RPCB)
+	n.SetLearnFromHB(cfg.LearnFromHB)
 
 	// (opzionale) watcher del file comandi servizi
+	if *svcCtrlFlag != "" {
+		go watchSvcControlFile(n, *svcCtrlFlag)
+	}
 	go watchSvcControlFile(n, "/tmp/services.ctrl")
 
 	// Avvio

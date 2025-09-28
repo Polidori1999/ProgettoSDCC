@@ -54,10 +54,15 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 
 // invia indietro un Heartbeat full con la vista locale.
 func (n *Node) handleRepairReq(env proto.Envelope) {
+	if !n.learnFromHB {
+		log.Printf("[REPAIR] request from %s ignorata (learnHB=false)", env.From)
+		return
+	}
 	if _, err := proto.DecodePayload[proto.RepairReq](env.Data); err != nil {
 		// payload malformato: ignoro
 		return
 	}
+
 	resp := proto.Heartbeat{
 		Epoch:    n.Registry.LocalEpoch(),
 		SvcVer:   n.Registry.LocalVersion(),
@@ -98,11 +103,15 @@ func (n *Node) handleHeartbeatLight(env proto.Envelope, hbd proto.HeartbeatLight
 		n.PeerMgr.LearnFromPiggyback(p2)
 	}
 
-	// se il meta remoto è più nuovo, chiedi subito REPAIR
+	// se il meta remoto è più nuovo, chiedi REPAIR solo se stai imparando da HB
 	if e0, v0, ok := n.Registry.RemoteMeta(peer); !ok || hbd.Epoch > e0 || (hbd.Epoch == e0 && hbd.SvcVer > v0) {
-		req := proto.RepairReq{Nonce: time.Now().UnixNano()}
-		out, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
-		n.GossipM.SendUDP(out, peer)
+		if n.learnFromHB {
+			req := proto.RepairReq{Nonce: time.Now().UnixNano()}
+			out, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
+			n.GossipM.SendUDP(out, peer)
+		} else {
+			log.Printf("[REPAIR] skip: learnHB=false → non richiedo HB(full) a %s (epoch=%d ver=%d)", peer, hbd.Epoch, hbd.SvcVer)
+		}
 	}
 
 	// aggiorna vista locale
@@ -156,10 +165,17 @@ func (n *Node) handleHeartbeatFull(env proto.Envelope, hb proto.Heartbeat) {
 	}
 
 	// aggiorna registry solo se epoch/ver sono nuovi
-	if n.Registry.UpdateWithVersion(peer, valid, hb.Epoch, hb.SvcVer) {
-		log.Printf("HB(full)   from %-12s epoch=%d ver=%d services=%v peers=%v", peer, hb.Epoch, hb.SvcVer, valid, hb.Peers)
+	// aggiorna registry solo se l'apprendimento da HB è abilitato
+	if n.learnFromHB {
+		// aggiornamento solo se epoch/ver sono nuovi
+		if n.Registry.UpdateWithVersion(peer, valid, hb.Epoch, hb.SvcVer) {
+			log.Printf("HB(full)   from %-12s epoch=%d ver=%d services=%v peers=%v", peer, hb.Epoch, hb.SvcVer, valid, hb.Peers)
+		} else {
+			log.Printf("HB(full)   from %-12s ignorato (epoch/ver non nuovi)", peer)
+		}
 	} else {
-		log.Printf("HB(full)   from %-12s ignorato (epoch/ver non nuovi)", peer)
+		// learning disabilitato: non memorizziamo mappa servizi da HB(full)
+		log.Printf("HB(full)   from %-12s learning DISABILITATO → salto update servizi (epoch=%d ver=%d)", peer, hb.Epoch, hb.SvcVer)
 	}
 }
 

@@ -31,6 +31,7 @@ type Config struct {
 	LookupMode      string // "ttl" | "gossip"
 	LookupTTL       int
 	LearnFromLookup bool
+	LearnFromHB     bool
 
 	// RPC (parametri servizi)
 	RPCA float64
@@ -103,8 +104,9 @@ func Load() Config {
 		LookupTTL:       envInt("SDCC_LOOKUP_TTL", 3),
 		LearnFromLookup: envBool("SDCC_LEARN_FROM_LOOKUP", true),
 
-		RPCA: envFloat("SDCC_RPC_A", 18),
-		RPCB: envFloat("SDCC_RPC_B", 3),
+		LearnFromHB: envBool("SDCC_LEARN_FROM_HB", true),
+		RPCA:        envFloat("SDCC_RPC_A", 18),
+		RPCB:        envFloat("SDCC_RPC_B", 3),
 	}
 }
 

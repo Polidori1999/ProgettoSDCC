@@ -117,3 +117,13 @@ docker compose kill node2            # (o docker kill node2)
 # stop & start
 docker compose stop node1
 docker compose start node1
+
+
+
+#ricerca con learn from lookup disattivato
+ docker compose run --rm --no-deps --name client2 \
+  -e SDCC_LOOKUP_MODE=gossip \
+  -e SDCC_LOOKUP_TTL=3 \
+  -e SDCC_LEARN_FROM_HB=false \
+  -e SDCC_LEARN_FROM_LOOKUP=true \
+  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=sum

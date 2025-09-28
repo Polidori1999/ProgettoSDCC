@@ -56,6 +56,7 @@ type Node struct {
 	lookupTTL       int
 	lookupMode      string // "ttl" (default) | "gossip"
 	learnFromLookup bool   // se false, pure gossip discovery
+	learnFromHB     bool
 
 	// parametri modalità FD
 	fdB, fdF, fdT int
@@ -109,6 +110,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 
 		suspectSeenCnt: make(map[string]uint8),
 		leaveSeenCnt:   make(map[string]uint8),
+		learnFromHB:    true,
 
 		// parametri gossip FD (usa questi come default fissi)
 
@@ -125,26 +127,6 @@ func (n *Node) SetGossipParams(B, F, T int) {
 		n.FailureD.SetGossipParams(B, F, T)
 	}
 }
-
-func (n *Node) SetLookupTTL(ttl int) {
-	if ttl < 0 {
-		ttl = 0
-	}
-	if ttl > n.maxTTL {
-		ttl = n.maxTTL
-	}
-	n.lookupTTL = ttl
-}
-
-func (n *Node) SetLookupMode(mode string) {
-	switch mode {
-	case "ttl", "gossip":
-		n.lookupMode = mode
-	default:
-		n.lookupMode = "ttl"
-	}
-}
-func (n *Node) SetLearnFromLookup(v bool) { n.learnFromLookup = v }
 
 func (n *Node) AddService(svc string) {
 	// c’era già almeno un servizio prima di aggiungere?
