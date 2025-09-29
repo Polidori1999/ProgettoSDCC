@@ -3,7 +3,6 @@ package node
 import (
 	"ProgettoSDCC/pkg/proto"
 	"log"
-	"math"
 	"time"
 )
 
@@ -13,10 +12,7 @@ func (n *Node) repairRound() {
 	if len(peers) == 0 {
 		return
 	}
-	k := int(math.Ceil(math.Log2(float64(len(peers)))))
-	if k < 1 {
-		k = 1
-	}
+	k := logFanout(len(peers))
 	targets := randomSubset(peers, k, n.GossipM.rnd)
 
 	full := proto.Heartbeat{

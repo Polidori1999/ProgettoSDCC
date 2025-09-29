@@ -1,6 +1,9 @@
 package node
 
-import "math/rand"
+import (
+	"math"
+	"math/rand"
+)
 
 // Commenti in italiano: utility condivise per slice di peer.
 
@@ -68,3 +71,17 @@ func (n *Node) SetLookupMode(mode string) {
 }
 func (n *Node) SetLearnFromLookup(v bool) { n.learnFromLookup = v }
 func (n *Node) SetLearnFromHB(v bool)     { n.learnFromHB = v }
+
+func logFanout(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	k := int(math.Ceil(math.Log2(float64(n))))
+	if k < 1 {
+		k = 1
+	}
+	if k > n {
+		k = n
+	}
+	return k
+}

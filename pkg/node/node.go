@@ -1,6 +1,7 @@
 package node
 
 import (
+	"ProgettoSDCC/pkg/config"
 	"ProgettoSDCC/pkg/proto"
 	"fmt"
 	"log"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"time"
 )
+
+const wait = 8 * time.Second
 
 type Node struct {
 	rumorMu  sync.RWMutex // ← NUOV
@@ -60,10 +63,14 @@ type Node struct {
 
 	// parametri modalità FD
 	fdB, fdF, fdT int
+
+	tickCluster    time.Duration
+	clientDeadline time.Duration // timeout complessivo (prima: 8s)
+
 }
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
-
+	cfg := config.Load()
 	parts := strings.Split(id, ":")
 	if len(parts) != 2 {
 		log.Fatalf("invalid id %s", id)
@@ -88,7 +95,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	// quorumThreshold iniziale verrà calcolato da updateQuorum()
 	quorum := 0
 	// FailureDetector ora accetta gossip manager e due timeout
-	fd := NewFailureDetector(pm, reg, gm, 15*time.Second, 22*time.Second)
+	fd := NewFailureDetector(pm, reg, gm, cfg.SuspectTimeout, cfg.DeadTimeout)
 
 	n := &Node{
 		PeerMgr:  pm,
@@ -112,6 +119,9 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		leaveSeenCnt:   make(map[string]uint8),
 		learnFromHB:    true,
 
+		//non modificare
+		tickCluster:    10 * time.Second,
+		clientDeadline: 8 * time.Second,
 		// parametri gossip FD (usa questi come default fissi)
 
 	}
@@ -270,7 +280,7 @@ func (n *Node) Run(lookupSvc string) {
 
 	// 1.b) Log periodico dello stato cluster/quorum
 	go func() {
-		tick := time.NewTicker(10 * time.Second)
+		tick := time.NewTicker(n.tickCluster)
 		defer tick.Stop()
 		for {
 			select {
@@ -363,10 +373,9 @@ func (n *Node) Run(lookupSvc string) {
 
 	// 4. Fallback al lookup storico
 	// 4. Lookup client mode
-	// 4. Lookup client mode
+
 	if lookupSvc != "" {
-		const wait = 8 * time.Second
-		deadline := time.Now().Add(wait)
+		deadline := time.Now().Add(n.clientDeadline)
 
 		// piccolo warm-up
 		time.Sleep(1200 * time.Millisecond)

@@ -2,7 +2,6 @@ package node
 
 import (
 	"ProgettoSDCC/pkg/proto"
-	"math"
 	"math/rand"
 	"net"
 	"time"
@@ -112,13 +111,7 @@ func (gm *GossipManager) fanout(pkt []byte) {
 	if n == 0 {
 		return
 	}
-	k := int(math.Ceil(math.Log2(float64(n))))
-	if k < 1 {
-		k = 1
-	}
-	if k > n {
-		k = n
-	}
+	k := logFanout(n)
 
 	gm.rnd.Shuffle(n, func(i, j int) { peers[i], peers[j] = peers[j], peers[i] })
 	for _, p := range peers[:k] {

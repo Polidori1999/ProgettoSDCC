@@ -3,7 +3,6 @@ package node
 import (
 	"fmt"
 	"log"
-	"math"
 	"sync"
 	"time"
 
@@ -19,6 +18,7 @@ type LookupManager struct {
 	reg                *ServiceRegistry
 	gossip             *GossipManager
 	learnFromResponses bool
+	negCacheTTL        time.Duration
 }
 
 // NewLookupManager costruisce e restituisce un LookupManager
@@ -31,6 +31,8 @@ func NewLookupManager(pm *PeerManager, sr *ServiceRegistry, gm *GossipManager) *
 		reg:                sr,
 		gossip:             gm,
 		learnFromResponses: true, // default: comportamento attuale
+
+		negCacheTTL: 30 * time.Second, // sostituisce l'hardcoded
 	}
 }
 
@@ -57,10 +59,7 @@ func (lm *LookupManager) Lookup(service string, ttl int) {
 		return
 	}
 
-	k := int(math.Ceil(math.Log2(float64(len(peers)))))
-	if k < 1 {
-		k = 1
-	}
+	k := logFanout(len(peers))
 	for _, p := range randomSubset(peers, k, lm.gossip.rnd) {
 		lm.gossip.SendUDP(msg, p)
 	}
@@ -159,7 +158,7 @@ func (lm *LookupManager) HandleRequest(env proto.Envelope) {
 	if lr.TTL <= 0 {
 		// TTL esaurito → negative cache
 		lm.mu.Lock()
-		lm.negCache[lr.Service] = time.Now().Add(30 * time.Second)
+		lm.negCache[lr.Service] = time.Now().Add(lm.negCacheTTL)
 		lm.mu.Unlock()
 		return
 	}
@@ -173,10 +172,7 @@ func (lm *LookupManager) HandleRequest(env proto.Envelope) {
 
 	if lr.MaxFw == 0 {
 		// FLOODING: k = ceil(log2(N))
-		k := int(math.Ceil(math.Log2(float64(len(peers)))))
-		if k < 1 {
-			k = 1
-		}
+		k := logFanout(len(peers))
 		for _, p := range randomSubset(peers, k, lm.gossip.rnd) {
 			if p == env.From || p == lr.Origin {
 				continue
