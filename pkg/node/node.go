@@ -16,8 +16,6 @@ import (
 	"time"
 )
 
-const wait = 8 * time.Second
-
 type Node struct {
 	rumorMu  sync.RWMutex // ← NUOV
 	PeerMgr  *PeerManager
@@ -57,8 +55,7 @@ type Node struct {
 	maxTTL int
 
 	lookupTTL       int
-	lookupMode      string // "ttl" (default) | "gossip"
-	learnFromLookup bool   // se false, pure gossip discovery
+	learnFromLookup bool // se false, pure gossip discovery
 	learnFromHB     bool
 
 	// parametri modalità FD
@@ -126,7 +123,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 
 	}
 	// calcola il quorum basato su peer iniziali + me
-	fd.SetGossipParams(n.fdB, n.fdF, n.fdT)
+	//fd.SetGossipParams(n.fdB, n.fdF, n.fdT)
 	n.updateQuorum()
 	return n
 }
@@ -372,39 +369,27 @@ func (n *Node) Run(lookupSvc string) {
 	}()
 
 	// 4. Fallback al lookup storico
-	// 4. Lookup client mode
 
+	// 4. Lookup client mode — GOSSIP only
 	if lookupSvc != "" {
 		deadline := time.Now().Add(n.clientDeadline)
 
-		// piccolo warm-up
+		// piccolo warm-up (lasciamo hardcoded)
 		time.Sleep(1200 * time.Millisecond)
 
+		// polling registry (lasciamo hardcoded)
 		check := time.NewTicker(250 * time.Millisecond)
 		defer check.Stop()
 
-		var resend *time.Ticker
-
-		if n.lookupMode == "ttl" {
-			// flooding leggero
-			resend = time.NewTicker(1 * time.Second)
-			defer resend.Stop()
-			lm.Lookup(lookupSvc, n.lookupTTL)
-		} else {
-			// gossip vero: UNA rumor iniziale + (opzionale) una riparazione
-			ttl := n.lookupTTL
-			if ttl < 2 {
-				ttl = 2
-			} // 1 hop spesso è poco
-			reqID := lm.LookupGossip(lookupSvc, ttl, n.fdB, n.fdF)
-			log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, n.fdB, n.fdF)
-
-			// (opzionale) unica riparazione dopo ~900ms
-			time.AfterFunc(900*time.Millisecond, func() {
-				// semplice re-invio con TTL/B incrementati, se vuoi
-				// lm.LookupGossip(lookupSvc, ttl+1, fanout+1, maxfw)
-			})
+		// TTL minimo 2 (come prima)
+		ttl := n.lookupTTL
+		if ttl < 2 {
+			ttl = 2
 		}
+
+		// invio iniziale gossip
+		reqID := lm.LookupGossip(lookupSvc, ttl, n.fdB, n.fdF)
+		log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, n.fdB, n.fdF)
 
 		for {
 			select {
@@ -430,15 +415,8 @@ func (n *Node) Run(lookupSvc string) {
 			case <-n.done:
 				return
 			default:
-				if resend != nil {
-					select {
-					case <-resend.C:
-						lm.Lookup(lookupSvc, n.lookupTTL)
-					default:
-					}
-				} else {
-					time.Sleep(10 * time.Millisecond)
-				}
+				// niente resend periodico: solo sleep
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
 	}

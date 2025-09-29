@@ -61,14 +61,6 @@ func (n *Node) SetLookupTTL(ttl int) {
 	n.lookupTTL = ttl
 }
 
-func (n *Node) SetLookupMode(mode string) {
-	switch mode {
-	case "ttl", "gossip":
-		n.lookupMode = mode
-	default:
-		n.lookupMode = "ttl"
-	}
-}
 func (n *Node) SetLearnFromLookup(v bool) { n.learnFromLookup = v }
 func (n *Node) SetLearnFromHB(v bool)     { n.learnFromHB = v }
 

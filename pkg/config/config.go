@@ -28,7 +28,7 @@ type Config struct {
 	RepairEvery   time.Duration
 
 	// Lookup
-	LookupMode      string // "ttl" | "gossip"
+
 	LookupTTL       int
 	LearnFromLookup bool
 	LearnFromHB     bool
@@ -100,7 +100,6 @@ func Load() Config {
 
 		RepairEnabled:   envBool("SDCC_REPAIR_ENABLED", false),
 		RepairEvery:     envDuration("SDCC_REPAIR_EVERY", 30*time.Second),
-		LookupMode:      envString("SDCC_LOOKUP_MODE", "ttl"),
 		LookupTTL:       envInt("SDCC_LOOKUP_TTL", 3),
 		LearnFromLookup: envBool("SDCC_LEARN_FROM_LOOKUP", true),
 

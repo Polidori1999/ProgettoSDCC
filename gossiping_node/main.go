@@ -128,8 +128,8 @@ func main() {
 
 	// Carica config da .env (niente hardcoded)
 	cfg := config.Load()
-	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d lookup=%s ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f)", cfg.HBLightEvery, cfg.HBFullEvery, cfg.SuspectTimeout, cfg.DeadTimeout,
-		cfg.FDB, cfg.FDF, cfg.FDT, cfg.LookupMode, cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
+	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f)", cfg.HBLightEvery, cfg.HBFullEvery, cfg.SuspectTimeout, cfg.DeadTimeout,
+		cfg.FDB, cfg.FDF, cfg.FDT, cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
 		cfg.RepairEnabled, cfg.RepairEvery, cfg.RPCA, cfg.RPCB)
 
 	// Crea nodo
@@ -145,7 +145,6 @@ func main() {
 	n.FailureD.SetTimeouts(cfg.SuspectTimeout, cfg.DeadTimeout)
 
 	// Lookup / Repair policy
-	n.SetLookupMode(cfg.LookupMode)
 	n.SetLookupTTL(cfg.LookupTTL)
 	n.SetLearnFromLookup(cfg.LearnFromLookup)
 	n.EnableRepair(cfg.RepairEnabled, cfg.RepairEvery)
