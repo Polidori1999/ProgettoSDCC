@@ -42,23 +42,24 @@ services:
     command: ["--id=node5:9005","--port=9005","--registry=registry:9000","--services=sub","--svc-ctrl=/tmp/services.ctrl"]
     ports: ["9005:9005/udp"]
 
-  node6:
-    <<: *node-common
-    container_name: node6
-    command: [ "--id=node6:9006","--port=9006","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
-    ports: [ "9006:9006/udp" ]
+##############
+  #node6:
+  #  <<: *node-common
+  #  container_name: node6
+  #  command: [ "--id=node6:9006","--port=9006","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
+  #  ports: [ "9006:9006/udp" ]
 
-  node7:
-    <<: *node-common
-    container_name: node7
-    command: [ "--id=node7:9007","--port=9007","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
-    ports: [ "9007:9007/udp" ]
+  #node7:
+  #  <<: *node-common
+  #  container_name: node7
+  #  command: [ "--id=node7:9007","--port=9007","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
+  #  ports: [ "9007:9007/udp" ]
 
-  node8:
-    <<: *node-common
-    container_name: node8
-    command: [ "--id=node8:9008","--port=9008","--registry=registry:9000","--services=sum","--svc-ctrl=/tmp/services.ctrl" ]
-    ports: [ "9008:9008/udp" ]
+  #node8:
+  #  <<: *node-common
+  #  container_name: node8
+  #  command: [ "--id=node8:9008","--port=9008","--registry=registry:9000","--services=sum","--svc-ctrl=/tmp/services.ctrl" ]
+  #  ports: [ "9008:9008/udp" ]
 
 
   client:

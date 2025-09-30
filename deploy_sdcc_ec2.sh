@@ -86,16 +86,23 @@ install_base() {
   case "$(pkg_detect)" in
     apt)
       $SUDO apt-get update -y
-      $SUDO apt-get install -y git curl ca-certificates
+      $SUDO apt-get install -y git ca-certificates curl
       ;;
     dnf|yum)
-      $SUDO "${PKG:-$(pkg_detect)}" -y install git curl ca-certificates || true
+      # Installa Git e ca-certificates. NON forzare 'curl' su AL2023.
+      $SUDO "${PKG:-$(pkg_detect)}" -y install git ca-certificates
+
+      # Installa 'curl' solo se né curl né curl-minimal sono presenti
+      if ! command -v curl >/dev/null 2>&1 && ! rpm -q curl-minimal >/dev/null 2>&1; then
+        $SUDO "${PKG:-$(pkg_detect)}" -y install curl || true
+      fi
       ;;
     *)
       echo "Package manager non riconosciuto: installa manualmente git/curl." >&2
       ;;
   esac
 }
+
 
 install_docker() {
   if command -v docker >/dev/null 2>&1; then
