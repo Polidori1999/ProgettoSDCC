@@ -123,7 +123,7 @@ func main() {
 		peersCSV = strings.Join(peerList, ",")
 	}
 
-	// servizi locali (opzionali)
+	// servizi locali
 	svcsCSV := strings.TrimSpace(*servicesFlag)
 
 	// Carica config da .env (niente hardcoded)
@@ -153,65 +153,87 @@ func main() {
 	n.SetRPCParams(cfg.RPCA, cfg.RPCB)
 	n.SetLearnFromHB(cfg.LearnFromHB)
 
-	// (opzionale) watcher del file comandi servizi
+	ctrlPath := "/tmp/services.ctrl"
 	if *svcCtrlFlag != "" {
-		go watchSvcControlFile(n, *svcCtrlFlag)
+		ctrlPath = *svcCtrlFlag
 	}
-	go watchSvcControlFile(n, "/tmp/services.ctrl")
+	go watchSvcControlFile(n, ctrlPath)
 
 	// Avvio
 	n.Run(lookupSvc)
 }
 
 // Osserva un file e applica comandi "ADD <svc>" / "DEL <svc>".
-// Semplice polling: appendi righe al file montato nel container.
+// Robusto contro duplicazioni e rotazioni: legge solo nuove righe,
+// ignora commenti/righe vuote e gestisce truncation.
 func watchSvcControlFile(n *node.Node, path string) {
-	// assicurati che il file esista
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0644)
+	// NOTE: commenti in italiano
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0644)
 	if err != nil {
 		log.Printf("[SVCC] errore apertura %s: %v", path, err)
 		return
 	}
 	defer f.Close()
-
-	// log d’avvio
 	log.Printf("[SVCC] watching %s (comandi: ADD <svc> | DEL <svc>)", path)
 
-	// posizionati alla fine: processa solo comandi nuovi
-	if _, err := f.Seek(0, os.SEEK_END); err != nil {
+	// ci posizioniamo in coda per leggere solo comandi futuri
+	off, err := f.Seek(0, os.SEEK_END)
+	if err != nil {
 		log.Printf("[SVCC] seek end fallito: %v", err)
+		off = 0
 	}
 
+	var lastLine string // evita di riprocessare la stessa riga se viene riscritta per errore
+
 	for {
-		r := bufio.NewReader(f)
-		for {
-			line, err := r.ReadString('\n')
+		// se il file è stato troncato/ruotato, riapri e riparti
+		if st, statErr := f.Stat(); statErr == nil && st.Size() < off {
+			_ = f.Close()
+			f, err = os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0644)
 			if err != nil {
-				break // niente nuove righe al momento
-			}
-			line = strings.TrimSpace(line)
-			if line == "" {
+				log.Printf("[SVCC] reopen %s: %v", path, err)
+				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
+			off, _ = f.Seek(0, os.SEEK_END)
+		}
+
+		r := bufio.NewReader(f)
+		for {
+			// prova a leggere una nuova riga
+			line, err := r.ReadString('\n')
+			if err != nil {
+				// nessuna riga nuova per ora
+				break
+			}
+			off += int64(len(line))
+
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || line == lastLine {
+				continue
+			}
+			lastLine = line
+
+			parts := strings.Fields(line)
+			if len(parts) != 2 {
 				log.Printf("[SVCC] comando non valido: %q", line)
 				continue
 			}
-			cmd := strings.ToUpper(fields[0])
-			svc := fields[1]
+			op := strings.ToUpper(parts[0])
+			svc := parts[1]
 
-			switch cmd {
+			switch op {
 			case "ADD":
+				// NB: usa i tuoi metodi: AddService / AddLocalService a seconda di come li hai chiamati
 				n.AddService(svc)
-				log.Printf("[SVCC] ADD %s", svc)
+				log.Printf("[SVCC] ADD %s ok", svc)
 			case "DEL":
 				n.RemoveService(svc)
-				log.Printf("[SVCC] DEL %s", svc)
+				log.Printf("[SVCC] DEL %s ok", svc)
 			default:
-				log.Printf("[SVCC] comando sconosciuto: %q", line)
+				log.Printf("[SVCC] op sconosciuta: %q", op)
 			}
 		}
-		time.Sleep(300 * time.Millisecond) // piccolo polling
+		time.Sleep(250 * time.Millisecond)
 	}
 }

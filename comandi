@@ -124,3 +124,7 @@ docker compose start node1
   -e SDCC_LEARN_FROM_HB=false \
   -e SDCC_LEARN_FROM_LOOKUP=true \
   client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=sum
+
+
+  #
+  ./deploy_sdcc_ec2.sh ec2-user ec2-50-19-201-206.compute-1.amazonaws.com https://github.com/Polidori1999/ProgettoSDCC.git main
