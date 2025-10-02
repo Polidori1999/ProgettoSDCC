@@ -55,8 +55,8 @@ func (n *Node) SetLookupTTL(ttl int) {
 	if ttl < 0 {
 		ttl = 0
 	}
-	if ttl > n.maxTTL {
-		ttl = n.maxTTL
+	if ttl > 24 {
+		ttl = 24
 	}
 	n.lookupTTL = ttl
 }
@@ -76,4 +76,10 @@ func logFanout(n int) int {
 		k = n
 	}
 	return k
+}
+
+func (n *Node) SetRPCParams(a, b float64) {
+	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
+	n.rpcA = a
+	n.rpcB = b
 }

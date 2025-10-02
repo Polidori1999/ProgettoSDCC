@@ -17,7 +17,7 @@ import (
 )
 
 type Node struct {
-	rumorMu  sync.RWMutex // ← NUOV
+	rumorMu  sync.RWMutex
 	PeerMgr  *PeerManager
 	Registry *ServiceRegistry
 	GossipM  *GossipManager
@@ -51,8 +51,6 @@ type Node struct {
 	repairEnabled bool
 	repairEvery   time.Duration
 	repairTick    *time.Ticker
-
-	maxTTL int
 
 	lookupTTL       int
 	learnFromLookup bool // se false, pure gossip discovery
@@ -165,13 +163,6 @@ func (n *Node) EnableRepair(enabled bool, every time.Duration) {
 		every = 30 * time.Second
 	}
 	n.repairEvery = every
-}
-
-// imposta i parametri A e B usati nelle invocazioni RPC
-func (n *Node) SetRPCParams(a, b float64) {
-	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
-	n.rpcA = a
-	n.rpcB = b
 }
 
 func (n *Node) Shutdown() {
@@ -368,32 +359,29 @@ func (n *Node) Run(lookupSvc string) {
 		}
 	}()
 
-	// 4. Fallback al lookup storico
-
 	// 4. Lookup client mode — GOSSIP only
 	if lookupSvc != "" {
+		// deadline del client (già configurata altrove)
 		deadline := time.Now().Add(n.clientDeadline)
 
-		// piccolo warm-up (lasciamo hardcoded)
+		// piccolo warm-up per permettere la convergenza minimale
 		time.Sleep(1200 * time.Millisecond)
 
-		// polling registry (lasciamo hardcoded)
-		check := time.NewTicker(250 * time.Millisecond)
-		defer check.Stop()
+		// polling locale del registry per la risposta di lookup
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
 
-		// TTL minimo 2 (come prima)
-		ttl := n.lookupTTL
-		if ttl < 2 {
-			ttl = 2
-		}
+		// TTL iniziale: minimo 2
+		initialTTL := n.lookupTTL
 
-		// invio iniziale gossip
-		reqID := lm.LookupGossip(lookupSvc, ttl, n.fdB, n.fdF)
-		log.Printf("[LOOKUP] gossip: rumor sent (req=%s TTL=%d B=%d F=%d)", reqID, ttl, n.fdB, n.fdF)
+		// invio iniziale gossip (B=n.fdB, dedupLimit=n.fdF)
+		reqID := lm.LookupGossip(lookupSvc, initialTTL, n.fdB, n.fdF)
+		log.Printf("[LOOKUP] sent (id=%s service=%s initialTTL=%d fanout=%d dedupLimit=%d)",
+			reqID, lookupSvc, initialTTL, n.fdB, n.fdF)
 
 		for {
 			select {
-			case <-check.C:
+			case <-tick.C:
 				if p, ok := n.Registry.Lookup(lookupSvc); ok {
 					fmt.Printf("Service %s → %s\n", lookupSvc, p)
 					resp, err := rpcCall(p, lookupSvc, n.rpcA, n.rpcB)
@@ -408,14 +396,13 @@ func (n *Node) Run(lookupSvc string) {
 					return
 				}
 				if time.Now().After(deadline) {
-					fmt.Printf("service %s not fount (timeout)\n", lookupSvc)
+					fmt.Printf("service %s not found (timeout)\n", lookupSvc)
 					n.Shutdown()
 					return
 				}
 			case <-n.done:
 				return
 			default:
-				// niente resend periodico: solo sleep
 				time.Sleep(10 * time.Millisecond)
 			}
 		}

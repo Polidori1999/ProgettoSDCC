@@ -16,6 +16,7 @@ set -euo pipefail
 # - Se il repo è privato via HTTPS, usa un PAT in REPO_URL (oppure usa URL SSH + chiave).
 # ------------------------------------------------------------------------------
 
+
 # ---- Logging semplice
 log()  { echo "INFO: $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }

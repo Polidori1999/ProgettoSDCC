@@ -14,7 +14,7 @@ import (
 
 // gestisce la guardia tombstone: se il meta remoto (epoch,ver)
 // è più nuovo del tombstone salvato, pulisce lo stato locale relativo al peer
-// (dead/leave/suspect visti) e unsuppress sul FailureDetector.
+// (dead/leave/suspect visti) e unsuppress sul Failuredetector.
 // Ritorna true se si può applicare normalmente l’HB; false se va ignorato.
 func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 	if eT, vT, hadTomb := n.Registry.TombMeta(peer); hadTomb {
@@ -37,6 +37,11 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 		for id := range n.deadSeenCnt {
 			if strings.HasPrefix(id, "dead|"+peer+"|") {
 				delete(n.deadSeenCnt, id)
+			}
+		}
+		for id := range n.suspectSeenCnt {
+			if strings.HasPrefix(id, "suspect|"+peer+"|") {
+				delete(n.suspectSeenCnt, id)
 			}
 		}
 

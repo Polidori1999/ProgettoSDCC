@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -81,15 +82,10 @@ func main() {
 	registryFlag := flag.String("registry", "", "host:port del service registry")
 	lookupFlag := flag.String("lookup", "", "service lookup then exit")
 
-	ttlFlag := flag.Int("ttl", 3, "hop-count per lookup (storico)")    // non usato ora
-	fanoutFlag := flag.Int("fanout", 2, "fanout per lookup (storico)") // non usato ora
-
 	peersFlag := flag.String("peers", "", "comma-separated initial peers (host:port)")
 	servicesFlag := flag.String("services", "", "comma-separated local services")
 	svcCtrlFlag := flag.String("svc-ctrl", "", "Path del file di controllo servizi (opzionale)")
 
-	_ = ttlFlag
-	_ = fanoutFlag
 	flag.Parse()
 
 	// ID di default: <hostname>:<port>
@@ -177,7 +173,7 @@ func watchSvcControlFile(n *node.Node, path string) {
 	log.Printf("[SVCC] watching %s (comandi: ADD <svc> | DEL <svc>)", path)
 
 	// ci posizioniamo in coda per leggere solo comandi futuri
-	off, err := f.Seek(0, os.SEEK_END)
+	off, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
 		log.Printf("[SVCC] seek end fallito: %v", err)
 		off = 0

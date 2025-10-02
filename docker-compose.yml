@@ -1,8 +1,10 @@
+
 x-node-common: &node-common
-  build: .
+  image: progettosdcc-node        # tutti riusano questa immagine
   stop_signal: SIGTERM
+  stop_grace_period: 2s
   depends_on: [registry]
-  env_file: [.env]
+  env_file: [.env]              # usa solo se il tuo config legge da ENV
 
 services:
   registry:
@@ -12,60 +14,52 @@ services:
     container_name: registry
     ports: ["9000:9000"]
 
+  # Costruisce UNA VOLTA l’immagine condivisa (tag: progettosdcc-node)
   node1:
     <<: *node-common
+    build: .
     container_name: node1
     command: ["--id=node1:9001","--port=9001","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl"]
-    ports: ["9001:9001/udp"]
+    # ports: ["9001:9001/udp"]
+    # volumes: ["./svcc/node1:/tmp/services.ctrl"]
 
   node2:
     <<: *node-common
     container_name: node2
+    depends_on: [registry, node1]  # immagine pronta + registry avviato
     command: ["--id=node2:9002","--port=9002","--registry=registry:9000","--services=sub","--svc-ctrl=/tmp/services.ctrl"]
-    ports: ["9002:9002/udp"]
+    # ports: ["9002:9002/udp"]
+    # volumes: ["./svcc/node2:/tmp/services.ctrl"]
 
   node3:
     <<: *node-common
     container_name: node3
+    depends_on: [registry, node1]
     command: ["--id=node3:9003","--port=9003","--registry=registry:9000","--services=div","--svc-ctrl=/tmp/services.ctrl"]
-    ports: ["9003:9003/udp"]
+    # ports: ["9003:9003/udp"]
+    # volumes: ["./svcc/node3:/tmp/services.ctrl"]
 
   node4:
     <<: *node-common
     container_name: node4
+    depends_on: [registry, node1]
     command: ["--id=node4:9004","--port=9004","--registry=registry:9000","--services=mul","--svc-ctrl=/tmp/services.ctrl"]
-    ports: ["9004:9004/udp"]
+    # ports: ["9004:9004/udp"]
+    # volumes: ["./svcc/node4:/tmp/services.ctrl"]
 
   node5:
     <<: *node-common
     container_name: node5
+    depends_on: [registry, node1]
     command: ["--id=node5:9005","--port=9005","--registry=registry:9000","--services=sub","--svc-ctrl=/tmp/services.ctrl"]
-    ports: ["9005:9005/udp"]
-
-##############
-  #node6:
-  #  <<: *node-common
-  #  container_name: node6
-  #  command: [ "--id=node6:9006","--port=9006","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
-  #  ports: [ "9006:9006/udp" ]
-
-  #node7:
-  #  <<: *node-common
-  #  container_name: node7
-  #  command: [ "--id=node7:9007","--port=9007","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl" ]
-  #  ports: [ "9007:9007/udp" ]
-
-  #node8:
-  #  <<: *node-common
-  #  container_name: node8
-  #  command: [ "--id=node8:9008","--port=9008","--registry=registry:9000","--services=sum","--svc-ctrl=/tmp/services.ctrl" ]
-  #  ports: [ "9008:9008/udp" ]
-
+    # ports: ["9005:9005/udp"]
+    # volumes: ["./svcc/node5:/tmp/services.ctrl"]
 
   client:
     <<: *node-common
     container_name: client
-    depends_on: [registry, node1, node2, node3, node4, node5]
+    # serve solo che node1 abbia buildato l'immagine; registry è facoltativo
+    depends_on: [node1, registry]
     entrypoint: ["gossip-node"]
     command: ["--id=client:9009","--port=9009","--registry=registry:9000","--lookup=sub"]
-    ports: ["9009:9009/udp"]
+    # ports: ["9009:9009/udp"]

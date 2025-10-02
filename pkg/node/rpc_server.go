@@ -129,7 +129,7 @@ func (n *Node) ensureRPCServer() {
 			n.rpcMu.Unlock()
 
 			n.rpcWG.Add(1)
-			go n.handleRPCConn(c) // esistente nel tuo progetto
+			go n.handleRPCConn(c)
 		}
 	}()
 }
