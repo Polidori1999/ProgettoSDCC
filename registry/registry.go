@@ -20,20 +20,6 @@ var (
 	nodeList  []nodeInfo
 )
 
-// buildMessageList deve essere chiamata DA CHI ha già preso listMutex
-func buildMessageListUnsafe() string {
-	var sb strings.Builder
-	for i, n := range nodeList {
-		if i > 0 {
-			sb.WriteString("#")
-		}
-		sb.WriteString(strconv.Itoa(n.id))
-		sb.WriteString("/")
-		sb.WriteString(n.addr)
-	}
-	return sb.String()
-}
-
 // buildMessageList costruisce "#1/addr1#2/addr2…"
 func buildMessageList() string {
 	listMutex.Lock()

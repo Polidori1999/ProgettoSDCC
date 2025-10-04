@@ -128,3 +128,31 @@ docker compose start node1
 
   #
   ./deploy_sdcc_ec2.sh ec2-user ec2-50-19-201-206.compute-1.amazonaws.com https://github.com/Polidori1999/ProgettoSDCC.git main
+
+
+
+#ricerca
+ docker compose run --rm --no-deps --name client2 \
+  -e SDCC_LEARN_FROM_LOOKUP=true \
+  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=sum
+
+
+   docker compose run --rm --no-deps --name client2 \
+    -e SDCC_LEARN_FROM_LOOKUP=true \
+    -e SDCC_LOOKUP_TTL=1\
+    client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=foo
+
+
+ #inserire nodo senza registry
+ docker compose run -d --no-deps --name node6 node1 \
+   --id=node6:9006 --port=9006 \
+   --peers=node2:9002 \
+   --services=add \
+   --svc-ctrl=/tmp/services.ctrl
+
+
+#per esperimenti
+docker compose down --remove-orphans
+docker compose -f docker-compose.yml -f docker-compose.exp2.yml --profile exp2 up --build
+docker compose -f docker-compose.yml -f docker-compose.exp2.yml --profile exp2 down --remove-orphans
+

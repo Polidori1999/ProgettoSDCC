@@ -20,7 +20,7 @@ services:
     build: .
     container_name: node1
     command: ["--id=node1:9001","--port=9001","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl"]
-    # ports: ["9001:9001/udp"]
+    ports: ["9001:9001/udp"]
     # volumes: ["./svcc/node1:/tmp/services.ctrl"]
 
   node2:
@@ -28,7 +28,7 @@ services:
     container_name: node2
     depends_on: [registry, node1]  # immagine pronta + registry avviato
     command: ["--id=node2:9002","--port=9002","--registry=registry:9000","--services=sub","--svc-ctrl=/tmp/services.ctrl"]
-    # ports: ["9002:9002/udp"]
+    ports: ["9002:9002/udp"]
     # volumes: ["./svcc/node2:/tmp/services.ctrl"]
 
   node3:
@@ -36,7 +36,7 @@ services:
     container_name: node3
     depends_on: [registry, node1]
     command: ["--id=node3:9003","--port=9003","--registry=registry:9000","--services=div","--svc-ctrl=/tmp/services.ctrl"]
-    # ports: ["9003:9003/udp"]
+    ports: ["9003:9003/udp"]
     # volumes: ["./svcc/node3:/tmp/services.ctrl"]
 
   node4:
@@ -44,7 +44,7 @@ services:
     container_name: node4
     depends_on: [registry, node1]
     command: ["--id=node4:9004","--port=9004","--registry=registry:9000","--services=mul","--svc-ctrl=/tmp/services.ctrl"]
-    # ports: ["9004:9004/udp"]
+    ports: ["9004:9004/udp"]
     # volumes: ["./svcc/node4:/tmp/services.ctrl"]
 
   node5:
@@ -52,7 +52,7 @@ services:
     container_name: node5
     depends_on: [registry, node1]
     command: ["--id=node5:9005","--port=9005","--registry=registry:9000","--services=sub","--svc-ctrl=/tmp/services.ctrl"]
-    # ports: ["9005:9005/udp"]
+    ports: ["9005:9005/udp"]
     # volumes: ["./svcc/node5:/tmp/services.ctrl"]
 
   client:
@@ -62,4 +62,4 @@ services:
     depends_on: [node1, registry]
     entrypoint: ["gossip-node"]
     command: ["--id=client:9009","--port=9009","--registry=registry:9000","--lookup=sub"]
-    # ports: ["9009:9009/udp"]
+    ports: ["9009:9009/udp"]

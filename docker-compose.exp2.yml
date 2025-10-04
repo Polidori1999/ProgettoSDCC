@@ -1,0 +1,41 @@
+#hb learning off
+services:
+  registry: { profiles: ["exp2"] }
+
+  node1:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_HB: "false"
+      SDCC_REPAIR_ENABLED: "false"
+
+  node2:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_HB: "false"
+      SDCC_REPAIR_ENABLED: "false"
+
+  node3:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_HB: "false"
+      SDCC_REPAIR_ENABLED: "false"
+
+  node4:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_HB: "false"
+      SDCC_REPAIR_ENABLED: "false"
+
+  node5:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_HB: "false"
+      SDCC_REPAIR_ENABLED: "false"
+
+  client:
+    profiles: ["exp2"]
+    environment:
+      SDCC_LEARN_FROM_LOOKUP: "true"
+    command: ["client","--id=client2:9011","--port=9011","--registry=registry:9000","--lookup=div"]
+    depends_on: [registry,node1,node2,node3,node4,node5]
+    restart: "no"

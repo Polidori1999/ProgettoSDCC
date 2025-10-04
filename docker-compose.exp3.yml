@@ -1,0 +1,46 @@
+#Repair efficace: Repair=true (30s), LearnFromHB=true, LearnFromLookup=true
+services:
+  registry: { profiles: ["exp3"] }
+
+  node1:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_HB: "true"
+      SDCC_REPAIR_ENABLED: "true"
+      SDCC_REPAIR_EVERY: "30s"
+
+  node2:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_HB: "true"
+      SDCC_REPAIR_ENABLED: "true"
+      SDCC_REPAIR_EVERY: "30s"
+
+  node3:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_HB: "true"
+      SDCC_REPAIR_ENABLED: "true"
+      SDCC_REPAIR_EVERY: "30s"
+
+  node4:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_HB: "true"
+      SDCC_REPAIR_ENABLED: "true"
+      SDCC_REPAIR_EVERY: "30s"
+
+  node5:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_HB: "true"
+      SDCC_REPAIR_ENABLED: "true"
+      SDCC_REPAIR_EVERY: "30s"
+
+  client:
+    profiles: ["exp3"]
+    environment:
+      SDCC_LEARN_FROM_LOOKUP: "true"
+    command: ["client","--id=client3:9012","--port=9012","--registry=registry:9000","--lookup=div"]
+    depends_on: [registry,node1,node2,node3,node4,node5]
+    restart: "no"

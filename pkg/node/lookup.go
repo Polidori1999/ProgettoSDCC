@@ -109,8 +109,15 @@ func (lm *LookupManager) HandleRequest(env proto.Envelope) {
 	// negative-cache: se il servizio è noto-inesistente, interrompi
 	lm.mu.Lock()
 	if exp, ok := lm.negCache[lr.Service]; ok && now.Before(exp) {
-		lm.mu.Unlock()
-		return
+		if now.Before(exp) {
+			log.Printf("NEG-CACHE drop svc=%s id=%s from=%s until=%s node=%s",
+				lr.Service, lr.ID, env.From, exp.Format(time.RFC3339), lm.gossip.self)
+			lm.mu.Unlock()
+			return
+		}
+		// scaduta: pulisci e continua
+		delete(lm.negCache, lr.Service)
+		log.Printf("NEG-CACHE expire svc=%s node=%s", lr.Service, lm.gossip.self)
 	}
 
 	// normalizza parametri minimi

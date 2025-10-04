@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const MAX int = 5
+
 type GossipManager struct {
 	peers *PeerManager
 
@@ -73,7 +75,7 @@ func (gm *GossipManager) sendLightHB() {
 	hb := proto.Heartbeat{
 		Epoch:  gm.reg.LocalEpoch(),
 		SvcVer: gm.reg.LocalVersion(),
-		Peers:  gm.peerHints(2),
+		Peers:  gm.peerHints(MAX),
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeatLight, gm.self, hb)
 	gm.fanout(pkt)

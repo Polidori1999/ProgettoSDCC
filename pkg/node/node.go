@@ -361,11 +361,9 @@ func (n *Node) Run(lookupSvc string) {
 
 	// 4. Lookup client mode — GOSSIP only
 	if lookupSvc != "" {
+		time.Sleep(6 * time.Second)
 		// deadline del client (già configurata altrove)
 		deadline := time.Now().Add(n.clientDeadline)
-
-		// piccolo warm-up per permettere la convergenza minimale
-		time.Sleep(1200 * time.Millisecond)
 
 		// polling locale del registry per la risposta di lookup
 		tick := time.NewTicker(250 * time.Millisecond)
@@ -373,6 +371,9 @@ func (n *Node) Run(lookupSvc string) {
 
 		// TTL iniziale: minimo 2
 		initialTTL := n.lookupTTL
+
+		deg := len(n.PeerMgr.List())
+		log.Printf("[LOOKUP] warm-up done: degree=%d, B=%d", deg, n.fdB)
 
 		// invio iniziale gossip (B=n.fdB, dedupLimit=n.fdF)
 		reqID := lm.LookupGossip(lookupSvc, initialTTL, n.fdB, n.fdF)
