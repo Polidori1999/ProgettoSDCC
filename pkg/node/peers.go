@@ -5,14 +5,15 @@ import (
 	"time"
 )
 
-// gestisce la lista dei peer e il loro LastSeen.
+// Gestisco la membership e il last-seen dei peer.
 type PeerManager struct {
 	mu       sync.Mutex
-	Peers    map[string]bool
-	LastSeen map[string]time.Time
+	Peers    map[string]bool      // set dei peer noti
+	LastSeen map[string]time.Time // ultimo heartbeat visto per ciascun peer
 }
 
-// inizializza il on una lista di indirizzi e il proprio ID.
+// Inizializzo la struttura partendo da una lista di seed e dal mio ID.
+// Segno i seed come vivi "ora" e, soprattutto, evito di inserire me stesso.
 func NewPeerManager(initial []string, selfID string) *PeerManager {
 	pm := &PeerManager{
 		Peers:    make(map[string]bool),
@@ -28,7 +29,8 @@ func NewPeerManager(initial []string, selfID string) *PeerManager {
 	return pm
 }
 
-// registra un nuovo peer.
+// Aggiungo/registro un peer (idempotente).
+// Aggiorno anche il last-seen così, se lo sto scoprendo adesso, parte "fresco".
 func (pm *PeerManager) Add(peer string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -36,14 +38,14 @@ func (pm *PeerManager) Add(peer string) {
 	pm.LastSeen[peer] = time.Now()
 }
 
-// aggiorna il timestamp dell’ultimo heartbeat ricevuto da peer.
+// Segno che ho appena visto un heartbeat da peer (non tocco il set).
 func (pm *PeerManager) Seen(peer string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.LastSeen[peer] = time.Now()
 }
 
-// elimina un peer (dead).
+// Rimuovo completamente un peer (usato su DEAD/LEAVE).
 func (pm *PeerManager) Remove(peer string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -51,7 +53,7 @@ func (pm *PeerManager) Remove(peer string) {
 	delete(pm.LastSeen, peer)
 }
 
-// restituisce una slice degli indirizzi di tutti i peer conosciuti.
+// Ritorno la lista corrente di peer noti (snapshot in slice).
 func (pm *PeerManager) List() []string {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -62,7 +64,7 @@ func (pm *PeerManager) List() []string {
 	return out
 }
 
-// peers.go
+// Restituisco il last-seen per un certo peer (se esiste).
 func (pm *PeerManager) GetLastSeen(peer string) (time.Time, bool) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -70,6 +72,7 @@ func (pm *PeerManager) GetLastSeen(peer string) (time.Time, bool) {
 	return ts, ok
 }
 
+// Ritorno una copia *consistente* della mappa LastSeen per scansioni senza lock esterno.
 func (pm *PeerManager) SnapshotLastSeen() map[string]time.Time {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -80,6 +83,7 @@ func (pm *PeerManager) SnapshotLastSeen() map[string]time.Time {
 	return cp
 }
 
+// Imparo un peer da piggyback (lo aggiungo al set ma non aggiorno last-seen: non ho HB diretto).
 func (pm *PeerManager) LearnFromPiggyback(peer string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()

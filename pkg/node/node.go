@@ -16,56 +16,66 @@ import (
 	"time"
 )
 
+// node è il “contenitore” del mio peer.
+// abbiamo PeerMgr (membership), Registry (servizi), GossipM (HB/UDP), FailureD (FD rumor),
+// listener UDP, (eventuale) server RPC TCP, e stato per quorum/rumor.
 type Node struct {
-	rumorMu  sync.RWMutex
-	PeerMgr  *PeerManager
-	Registry *ServiceRegistry
-	GossipM  *GossipManager
-	FailureD *FailureDetector
-	ID       string
-	Port     int
+	rumorMu sync.RWMutex
 
-	// rumor tracking for quorum-based failure detector
-	suspectCount    map[string]int   // peer → numero di rumor sospetti visti
-	seenSuspect     map[string]bool  // rumorID sospetti già visti
-	deadSeenCnt     map[string]uint8 // ← NUOVO: rumorID → quante volte l'ho visto
-	suspectSeenCnt  map[string]uint8
-	leaveSeenCnt    map[string]uint8
-	quorumThreshold int             // soglia di quorum per confermare dead 	// i seed passati in --peers
-	seenLeave       map[string]bool // peer → già processato Leave
-	handledDead     map[string]bool
-	udpConn         *net.UDPConn
-	done            chan struct{}
-	shutdownOnce    sync.Once
+	PeerMgr  *PeerManager     // gestione peer e last-seen
+	Registry *ServiceRegistry // servizi locali/remoti + tombstones
+	GossipM  *GossipManager   // invio HB/rumor via UDP
+	FailureD *FailureDetector // emissione SUSPECT + timeouts
+	ID       string           // "host:port"
+	Port     int              // porta (UDP e TCP RPC)
 
-	//track connessione tcp
+	// ---- stato rumor/quorum ----
+	suspectCount    map[string]int   // peer → numero di SUSPECT "voti" ricevuti
+	seenSuspect     map[string]bool  // rumorID SUSPECT già visto (dedup)
+	deadSeenCnt     map[string]uint8 // rumorID DEAD → contatore viste (per F)
+	suspectSeenCnt  map[string]uint8 // rumorID SUSPECT → contatore viste (per F)
+	leaveSeenCnt    map[string]uint8 // rumorID LEAVE → contatore viste (per F)
+	quorumThreshold int              // soglia per dichiarare DEAD
+	seenLeave       map[string]bool  // peer → ho già processato leave
+	handledDead     map[string]bool  // peer → ho già applicato DEAD
+	udpConn         *net.UDPConn     // mio socket UDP
+	done            chan struct{}    // chiusura globale
+	shutdownOnce    sync.Once        // per idempotenza di Shutdown
+
+	// ---- TCP RPC server ----
 	rpcLn    net.Listener
 	rpcMu    sync.Mutex
 	rpcConns map[net.Conn]struct{}
 	rpcWG    sync.WaitGroup
 
-	//parametri servizi
-	rpcA float64 // parametro A per l'RPC
-	rpcB float64 // parametro B per l'RPC
+	// ---- parametri demo RPC ----
+	rpcA float64
+	rpcB float64
 
+	// ---- repair push–pull ----
 	repairEnabled bool
 	repairEvery   time.Duration
 	repairTick    *time.Ticker
 
+	// ---- lookup policy ----
 	lookupTTL       int
-	learnFromLookup bool // se false, pure gossip discovery
-	learnFromHB     bool
+	learnFromLookup bool
+	learnFromHB     bool // apprendere servizi dagli HB(full)
 
-	// parametri modalità FD
+	// ---- FD gossip params (B,F,T) ----
 	fdB, fdF, fdT int
 
+	// ---- logging periodico e client deadline ----
 	tickCluster    time.Duration
-	clientDeadline time.Duration // timeout complessivo (prima: 8s)
-
+	clientDeadline time.Duration
 }
+
+// costruisco tutto (PeerMgr/Registry/GossipM/FailureD), setto
 
 func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 	cfg := config.Load()
+
+	// Estraggo la porta da id (formato atteso "host:port")
 	parts := strings.Split(id, ":")
 	if len(parts) != 2 {
 		log.Fatalf("invalid id %s", id)
@@ -75,22 +85,23 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		log.Fatalf("bad port: %v", err)
 	}
 
+	// Seeds iniziali per il PeerManager (possono essere vuoti)
 	seeds := strings.Split(peerCSV, ",")
 	pm := NewPeerManager(seeds, id)
+
+	// Registro servizi locali (CSV, può essere vuoto)
 	reg := NewServiceRegistry()
 	reg.AddLocal(id, svcCSV)
 	log.Printf("[BOOT] %s local services: %v", id, reg.LocalServices())
 
-	//dm := NewDigestManager()
-
+	// RNG per GossipManager (seed adesso)
 	src := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(src)
 	gm := NewGossipManager(pm, reg, id, r)
 
-	// quorumThreshold iniziale verrà calcolato da updateQuorum()
-	quorum := 0
-	// FailureDetector ora accetta gossip manager e due timeout
-	fd := NewFailureDetector(pm, reg, gm, cfg.SuspectTimeout, cfg.DeadTimeout)
+	// FailureDetector: prendo i timeout dalla config
+	quorum := 0 // lo ricalcolo subito dopo con updateQuorum()
+	fd := NewFailureDetector(pm, gm, cfg.SuspectTimeout, cfg.DeadTimeout)
 
 	n := &Node{
 		PeerMgr:  pm,
@@ -103,29 +114,28 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		suspectCount: make(map[string]int),
 		seenSuspect:  make(map[string]bool),
 
-		deadSeenCnt:     make(map[string]uint8), // ← init
+		deadSeenCnt:     make(map[string]uint8),
 		handledDead:     make(map[string]bool),
 		quorumThreshold: quorum,
 		seenLeave:       make(map[string]bool),
-		done:            make(chan struct{}), // globale cosi non lo
+		done:            make(chan struct{}),
 		rpcConns:        make(map[net.Conn]struct{}),
 
 		suspectSeenCnt: make(map[string]uint8),
 		leaveSeenCnt:   make(map[string]uint8),
-		learnFromHB:    true,
 
-		//non modificare
+		learnFromHB: true, // default: imparo dai full-HB
+
+		// Nota: questi due li tengo costanti salvo override altrove
 		tickCluster:    10 * time.Second,
 		clientDeadline: 8 * time.Second,
-		// parametri gossip FD (usa questi come default fissi)
-
 	}
-	// calcola il quorum basato su peer iniziali + me
-	//fd.SetGossipParams(n.fdB, n.fdF, n.fdT)
+	// Calcolo soglia quorum in base ai peer iniziali
 	n.updateQuorum()
 	return n
 }
 
+// imposto B,F,T lato Node e inoltro al FailureDetector.
 func (n *Node) SetGossipParams(B, F, T int) {
 	n.fdB, n.fdF, n.fdT = B, F, T
 	if n.FailureD != nil {
@@ -133,22 +143,24 @@ func (n *Node) SetGossipParams(B, F, T int) {
 	}
 }
 
+// aggiungo un servizio locale; se è il **primo** servizio, apro il TCP RPC.
+// In ogni caso, triggero subito un HB(full) per propagare lo stato nuovo.
 func (n *Node) AddService(svc string) {
-	// c’era già almeno un servizio prima di aggiungere?
 	had := len(n.Registry.LocalServices()) > 0
-
 	if n.Registry.AddLocalService(n.ID, svc) {
 		if !had {
-			n.ensureRPCServer() // primo servizio → apri TCP adesso
+			n.ensureRPCServer() // primo servizio → apro listener TCP ora
 		}
 		n.GossipM.TriggerHeartbeatFullNow()
 		log.Printf("[SR] add local service=%q → gossip full now", svc)
 	}
 }
 
+//	rimuovo un servizio locale; se è l’ultimo, chiudo il TCP RPC.
+//
+// Poi triggero HB(full) per aggiornare i peer.
 func (n *Node) RemoveService(svc string) {
 	if n.Registry.RemoveLocalService(n.ID, svc) {
-		// se ora non ho più servizi locali, chiudo il TCP
 		if len(n.Registry.LocalServices()) == 0 {
 			n.closeRPCServerIfIdle()
 		}
@@ -157,6 +169,7 @@ func (n *Node) RemoveService(svc string) {
 	}
 }
 
+// abilito/disabilito il ciclo di repair (con default a 30s se non specificato).
 func (n *Node) EnableRepair(enabled bool, every time.Duration) {
 	n.repairEnabled = enabled
 	if every <= 0 {
@@ -165,9 +178,13 @@ func (n *Node) EnableRepair(enabled bool, every time.Duration) {
 	n.repairEvery = every
 }
 
+// invio un LEAVE (gossip) a B peer vivi, poi spengo tutto (ticker, goroutine, UDP, TCP).
+// Uso shutdownOnce per garantire idempotenza, e chiudo connessioni RPC in modo cooperativo.
 func (n *Node) Shutdown() {
 	n.shutdownOnce.Do(func() {
 		log.Printf("→ Shutdown: propago Leave e chiudo tutto…")
+
+		// Annuncio di LEAVE con rumor-id univoco
 		rid := fmt.Sprintf("leave|%s|%d|", n.ID, time.Now().UnixNano())
 		lv := proto.Leave{
 			RumorID: rid, Peer: n.ID,
@@ -175,22 +192,13 @@ func (n *Node) Shutdown() {
 		}
 		pkt, _ := proto.Encode(proto.MsgLeave, n.ID, lv)
 
-		alive := n.alivePeers()
-		B := n.fdB
-		if B < 1 {
-			B = 1
+		targets := n.pickTargets(exclude(n.alivePeers(), n.ID), n.fdB)
+		for _, p := range targets {
+			n.GossipM.SendUDP(pkt, p)
 		}
-		if B > len(alive) {
-			B = len(alive)
-		}
+		time.Sleep(500 * time.Millisecond) // piccola grace per far circolare il leave
 
-		for _, p := range randomSubset(alive, B, n.GossipM.rnd) {
-			if p != n.ID {
-				n.GossipM.SendUDP(pkt, p)
-			}
-		}
-		time.Sleep(500 * time.Millisecond) // breve grace
-
+		// Stop repair ticker
 		if n.repairTick != nil {
 			n.repairTick.Stop()
 			n.repairTick = nil
@@ -203,24 +211,25 @@ func (n *Node) Shutdown() {
 			n.FailureD.Stop()
 		}
 
-		// Segnala done
+		// Segnalo done a tutte le goroutine
 		close(n.done)
 
-		// Chiudi UDP per sbloccare i reader
+		// Chiudo UDP per sbloccare il reader
 		if n.udpConn != nil {
 			_ = n.udpConn.Close()
 		}
 
-		// === NUOVO: chiudi TCP listener e connessioni attive ===
+		// Chiudo TCP listener e tutte le connessioni attive
 		if n.rpcLn != nil {
-			_ = n.rpcLn.Close() // sblocca Accept
+			_ = n.rpcLn.Close()
 		}
 		n.rpcMu.Lock()
 		for c := range n.rpcConns {
-			_ = c.Close() // sveglia handler bloccati
+			_ = c.Close()
 		}
 		n.rpcMu.Unlock()
-		// aspetta gli handler (con piccolo timeout)
+
+		// Aspetto gli handler RPC con timeout breve
 		doneRPC := make(chan struct{})
 		go func() { n.rpcWG.Wait(); close(doneRPC) }()
 		select {
@@ -234,9 +243,11 @@ func (n *Node) Shutdown() {
 	})
 }
 
+// avvio segnale di shutdown, componenti periodiche, socket UDP e loop di ricezione.
+// Se `lookupSvc` è non vuoto, entro in modalità **client one-shot** (faccio lookup e termino).
 func (n *Node) Run(lookupSvc string) {
 
-	// 1. intercetta SIGTERM/SIGINT
+	// 1) Gestione SIGINT/SIGTERM → Shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -244,10 +255,11 @@ func (n *Node) Run(lookupSvc string) {
 		n.Shutdown()
 	}()
 
-	// 1. Avvia gossip e failure detector
+	// 2) Avvio Gossip e FailureDetector
 	n.GossipM.Start()
 	n.FailureD.Start()
-	// Avvia il repair push–pull se abilitato
+
+	// 3) Avvio del repair push–pull (se abilitato)
 	if n.repairEnabled {
 		n.repairTick = time.NewTicker(n.repairEvery)
 		go func() {
@@ -261,12 +273,13 @@ func (n *Node) Run(lookupSvc string) {
 			}
 		}()
 	}
-	// avvia RPC TCP se ho servizi locali
+
+	// 4) Avvio TCP RPC se ho almeno un servizio locale
 	if ls := n.Registry.LocalServices(); len(ls) > 0 {
-		go n.serveArithmeticTCP(fmt.Sprintf(":%d", n.Port))
+		n.ensureRPCServer()
 	}
 
-	// 1.b) Log periodico dello stato cluster/quorum
+	// 5) Log periodico di stato cluster/quorum (solo informativo)
 	go func() {
 		tick := time.NewTicker(n.tickCluster)
 		defer tick.Stop()
@@ -274,7 +287,7 @@ func (n *Node) Run(lookupSvc string) {
 			select {
 			case <-tick.C:
 				peers := n.alivePeers()
-				aliveCount := len(peers) + 1
+				aliveCount := len(peers) + 1 // includo me stesso
 				log.Printf(">> Cluster alive=%d  quorum=%d  peers=%v", aliveCount, n.quorumThreshold, peers)
 			case <-n.done:
 				return
@@ -282,7 +295,7 @@ func (n *Node) Run(lookupSvc string) {
 		}
 	}()
 
-	// 2. Apri socket UDP
+	// 6) Apro il socket UDP per ricevere messaggi
 	addr := &net.UDPAddr{Port: n.Port, IP: net.IPv4zero}
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
@@ -294,8 +307,7 @@ func (n *Node) Run(lookupSvc string) {
 	n.udpConn = conn
 	defer conn.Close()
 
-	// 3. Goroutine di lettura gossip e lookup
-
+	// 7) Loop di ricezione (gossip/lookup) su goroutine dedicata
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -303,6 +315,7 @@ func (n *Node) Run(lookupSvc string) {
 			case <-n.done:
 				return
 			default:
+				// Nota: ReadFromUDP è bloccante; lo sblocco con Close() in Shutdown
 				nRead, _, err := conn.ReadFromUDP(buf)
 				if err != nil {
 					if strings.Contains(err.Error(), "closed network connection") {
@@ -317,7 +330,6 @@ func (n *Node) Run(lookupSvc string) {
 				}
 
 				switch env.Type {
-
 				case proto.MsgRepairReq:
 					n.handleRepairReq(env)
 
@@ -359,23 +371,21 @@ func (n *Node) Run(lookupSvc string) {
 		}
 	}()
 
-	// 4. Lookup client mode — GOSSIP only
+	// 8) Modalità client one-shot (lookup) → invio gossip lookup, attendo risposta o timeout, poi Shutdown
 	if lookupSvc != "" {
-		time.Sleep(6 * time.Second)
-		// deadline del client (già configurata altrove)
+		time.Sleep(6 * time.Second) // mini warm-up per scambiare qualche HB
 		deadline := time.Now().Add(n.clientDeadline)
 
-		// polling locale del registry per la risposta di lookup
 		tick := time.NewTicker(250 * time.Millisecond)
 		defer tick.Stop()
 
-		// TTL iniziale: minimo 2
+		// TTL iniziale proviene dalla config (settato da main), minimo 2
 		initialTTL := n.lookupTTL
 
 		deg := len(n.PeerMgr.List())
 		log.Printf("[LOOKUP] warm-up done: degree=%d, B=%d", deg, n.fdB)
 
-		// invio iniziale gossip (B=n.fdB, dedupLimit=n.fdF)
+		// Invio iniziale (fanout=B, dedupLimit=F)
 		reqID := lm.LookupGossip(lookupSvc, initialTTL, n.fdB, n.fdF)
 		log.Printf("[LOOKUP] sent (id=%s service=%s initialTTL=%d fanout=%d dedupLimit=%d)",
 			reqID, lookupSvc, initialTTL, n.fdB, n.fdF)
@@ -383,6 +393,7 @@ func (n *Node) Run(lookupSvc string) {
 		for {
 			select {
 			case <-tick.C:
+				// Se qualcuno ha risposto, il Registry locale ha il mapping
 				if p, ok := n.Registry.Lookup(lookupSvc); ok {
 					fmt.Printf("Service %s → %s\n", lookupSvc, p)
 					resp, err := rpcCall(p, lookupSvc, n.rpcA, n.rpcB)
@@ -409,7 +420,7 @@ func (n *Node) Run(lookupSvc string) {
 		}
 	}
 
-	// 5. Nodo normale: non esce mai
+	// 9) Nodo “server”: resto vivo fino a Shutdown
 	<-n.done
 	return
 }

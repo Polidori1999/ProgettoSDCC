@@ -1,7 +1,6 @@
 package node
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,72 +11,22 @@ import (
 	"ProgettoSDCC/pkg/services"
 )
 
-func (n *Node) serveArithmeticTCP(addr string) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Printf("[RPC] listen %s: %v", addr, err)
-		return
-	}
-	n.rpcLn = ln
-	log.Printf("[RPC] in ascolto su tcp://%s", addr)
-
-	// chiudi il listener quando fai shutdown
-	go func() { <-n.done; _ = ln.Close() }()
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-n.done:
-				return // listener chiuso per shutdown
-			default:
-				if !errors.Is(err, net.ErrClosed) {
-					log.Printf("[RPC] accept: %v", err)
-				}
-				continue
-			}
-		}
-
-		// traccia conn
-		n.rpcMu.Lock()
-		n.rpcConns[conn] = struct{}{}
-		n.rpcMu.Unlock()
-
-		n.rpcWG.Add(1)
-		go func(c net.Conn) {
-			defer n.rpcWG.Done()
-			defer func() {
-				n.rpcMu.Lock()
-				delete(n.rpcConns, c)
-				n.rpcMu.Unlock()
-				_ = c.Close()
-			}()
-
-			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-
-			var req proto.InvokeRequest
-			if err := proto.ReadJSONFrame(c, &req); err != nil {
-				_ = proto.WriteJSONFrame(c, proto.InvokeResponse{ReqID: req.ReqID, OK: false, Error: "bad request"})
-				return
-			}
-
-			res, err := services.Execute(req.Service, req.A, req.B)
-			if err != nil {
-				_ = proto.WriteJSONFrame(c, proto.InvokeResponse{ReqID: req.ReqID, OK: false, Error: err.Error()})
-				return
-			}
-			_ = proto.WriteJSONFrame(c, proto.InvokeResponse{
-				ReqID:  req.ReqID,
-				OK:     true,
-				Result: res,
-			})
-			// one-shot → return (defer chiude)
-		}(conn)
-	}
-}
-
+// Handler autosufficiente: traccia conn, WG, deadline, read → exec → write, cleanup.
 func (n *Node) handleRPCConn(c net.Conn) {
-	defer c.Close()
+	n.rpcWG.Add(1)
+
+	n.rpcMu.Lock()
+	n.rpcConns[c] = struct{}{}
+	n.rpcMu.Unlock()
+
+	defer func() {
+		n.rpcMu.Lock()
+		delete(n.rpcConns, c)
+		n.rpcMu.Unlock()
+		_ = c.Close()
+		n.rpcWG.Done()
+	}()
+
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 
 	var req proto.InvokeRequest
@@ -98,43 +47,40 @@ func (n *Node) handleRPCConn(c net.Conn) {
 	})
 }
 
-// Avvia il listener TCP se non già attivo.
+// Avvio il listener TCP (se non già attivo) e accetto connessioni, delegando a handleRPCConn.
 func (n *Node) ensureRPCServer() {
 	n.rpcMu.Lock()
-	defer n.rpcMu.Unlock()
 	if n.rpcLn != nil {
-		return
+		n.rpcMu.Unlock()
+		return // già in ascolto
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
 	if err != nil {
+		n.rpcMu.Unlock()
 		log.Printf("[RPC] listen error: %v", err)
 		return
 	}
 	n.rpcLn = ln
+	n.rpcMu.Unlock()
+
 	log.Printf("[RPC] listening on :%d", n.Port)
 
-	n.rpcWG.Add(1)
 	go func() {
-		defer n.rpcWG.Done()
 		for {
 			c, err := ln.Accept()
 			if err != nil {
+				// esco quando chiudo il listener allo shutdown / idle
 				if strings.Contains(err.Error(), "closed network connection") {
 					return
 				}
 				continue
 			}
-			n.rpcMu.Lock()
-			n.rpcConns[c] = struct{}{}
-			n.rpcMu.Unlock()
-
-			n.rpcWG.Add(1)
 			go n.handleRPCConn(c)
 		}
 	}()
 }
 
-// Chiude il listener quando non ho più servizi locali.
+// Chiudo il listener quando non ho più servizi locali.
 func (n *Node) closeRPCServerIfIdle() {
 	n.rpcMu.Lock()
 	if n.rpcLn != nil {

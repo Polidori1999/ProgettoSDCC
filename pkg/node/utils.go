@@ -5,9 +5,8 @@ import (
 	"math/rand"
 )
 
-// Commenti in italiano: utility condivise per slice di peer.
-
-// restituisce fino a k peer distinti, shuffleando in-place una copia.
+// ritorno al più k peer distinti.
+// Se k >= len(peers) restituisco direttamente la slice (solo lettura!).
 func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
 	if len(peers) <= k {
 		return peers
@@ -18,7 +17,7 @@ func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
 	return out[:k]
 }
 
-// exclude crea una nuova slice che esclude le entry “bad”.
+// filtro 'src' rimuovendo gli elementi in 'bad' (lookup O(1) via mappa).
 func exclude(src []string, bad ...string) []string {
 	if len(src) == 0 {
 		return src
@@ -36,8 +35,7 @@ func exclude(src []string, bad ...string) []string {
 	return out
 }
 
-// scelgo fino a B target dai peers; garantisco B>=1 e B<=len(peers).
-// se peers è vuoto → ritorna nil.
+// scelgo fino a B target (B clamped a [1, len(peers)]) usando l’RNG del Gossip.
 func (n *Node) pickTargets(peers []string, B int) []string {
 	if len(peers) == 0 {
 		return nil
@@ -51,6 +49,7 @@ func (n *Node) pickTargets(peers []string, B int) []string {
 	return randomSubset(peers, B, n.GossipM.rnd)
 }
 
+// clampo il TTL tra 0 e 24 (policy).
 func (n *Node) SetLookupTTL(ttl int) {
 	if ttl < 0 {
 		ttl = 0
@@ -64,6 +63,7 @@ func (n *Node) SetLookupTTL(ttl int) {
 func (n *Node) SetLearnFromLookup(v bool) { n.learnFromLookup = v }
 func (n *Node) SetLearnFromHB(v bool)     { n.learnFromHB = v }
 
+// k  ceil(log2(n)) clampato a [1, n]; se n<=0 → 0.
 func logFanout(n int) int {
 	if n <= 0 {
 		return 0
@@ -78,8 +78,8 @@ func logFanout(n int) int {
 	return k
 }
 
+// setto i parametri RPC (operazione semplice, niente lock necessario).
 func (n *Node) SetRPCParams(a, b float64) {
-	// Commenti in italiano: operazione semplice, nessuna concorrenza critica qui
 	n.rpcA = a
 	n.rpcB = b
 }

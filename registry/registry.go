@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// nodeInfo rappresenta un nodo registrato: id, indirizzo host:port
+// salvo un ID progressivo e l'indirizzo host:port del nodo registrato.
 type nodeInfo struct {
 	id   int
 	addr string
@@ -19,23 +19,6 @@ var (
 	listMutex sync.Mutex
 	nodeList  []nodeInfo
 )
-
-// buildMessageList costruisce "#1/addr1#2/addr2…"
-func buildMessageList() string {
-	listMutex.Lock()
-	defer listMutex.Unlock()
-
-	var sb strings.Builder
-	for i, n := range nodeList {
-		if i > 0 {
-			sb.WriteString("#")
-		}
-		sb.WriteString(strconv.Itoa(n.id))
-		sb.WriteString("/")
-		sb.WriteString(n.addr)
-	}
-	return sb.String()
-}
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()

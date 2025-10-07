@@ -19,6 +19,7 @@ const (
 	MsgRepairReq                         // 8 – repair request
 )
 
+// String: mi serve solo per log leggibili.
 func (m MsgType) String() string {
 	switch m {
 	case MsgHeartbeat:
@@ -43,19 +44,22 @@ func (m MsgType) String() string {
 }
 
 type Envelope struct {
-	Type MsgType         `json:"type"`
-	From string          `json:"from"`
-	TS   int64           `json:"ts"`
-	Data json.RawMessage `json:"data"`
+	Type MsgType         `json:"type"` // tipo messaggio
+	From string          `json:"from"` // mittente (host:port)
+	TS   int64           `json:"ts"`   // timestamp ns (solo log/ordinamento)
+	Data json.RawMessage `json:"data"` // payload JSON grezzo
 }
 
 // ---------- payload ----------
+
+// hb“light”: solo meta (epoch, svcver) + hints di peer.
 type HeartbeatLight struct {
 	Epoch  int64    `json:"epoch"`
 	SvcVer uint64   `json:"svcver"`
 	Peers  []string `json:"peers,omitempty"`
 }
 
+// hb“full”: meta + miei servizi + lista completa peer.
 type Heartbeat struct {
 	Services []string `json:"services,omitempty"`
 	Epoch    int64    `json:"epoch"`
@@ -63,6 +67,7 @@ type Heartbeat struct {
 	Peers    []string `json:"peers,omitempty"`
 }
 
+// elave rumor (con B/F/T opzionali)
 type Leave struct {
 	RumorID string `json:"rumorID"`
 	Peer    string `json:"peer"`
@@ -71,18 +76,19 @@ type Leave struct {
 	TTL     uint8  `json:"ttl,omitempty"`
 }
 
+// Repair: richiesta “mandami un HB(full)”
 type RepairReq struct {
 	Nonce int64 `json:"nonce"`
 }
 
-// Lookup
+// Lookup GOSSIP: riuso MaxFw come dedupLimit (documentato qui).
 type LookupRequest struct {
 	ID      string `json:"id"`
 	Service string `json:"service"`
 	Origin  string `json:"origin"`
 	TTL     int    `json:"ttl"`
 	Fanout  uint8  `json:"fanout,omitempty"` // B
-	MaxFw   uint8  `json:"maxfw,omitempty"`  // F
+	MaxFw   uint8  `json:"maxfw,omitempty"`  // F (usato come dedupLimit)
 }
 
 type LookupResponse struct {
@@ -90,7 +96,7 @@ type LookupResponse struct {
 	Provider string `json:"provider"`
 }
 
-// Suspect / Dead rumors
+// Suspect / Dead rumors (stessa forma, cambia semantica)
 type SuspectRumor struct {
 	RumorID string `json:"rumorID"`
 	Peer    string `json:"peer"`
@@ -108,6 +114,8 @@ type DeadRumor struct {
 }
 
 // ---------- helpers ----------
+
+// impacchetto payload in Envelope con type/from/ts, poi JSON.
 func Encode(mt MsgType, from string, payload any) ([]byte, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -117,13 +125,14 @@ func Encode(mt MsgType, from string, payload any) ([]byte, error) {
 	return json.Marshal(env)
 }
 
+// estraggo solo l’envelope (payload resta RawMessage).
 func Decode(b []byte) (Envelope, error) {
 	var env Envelope
 	err := json.Unmarshal(b, &env)
 	return env, err
 }
 
-// Decoder generico: rimpiazza tutti i DecodeXYZ(...)
+// decoder generico per il Data dentro l’envelope.
 func DecodePayload[T any](raw json.RawMessage) (T, error) {
 	var v T
 	err := json.Unmarshal(raw, &v)

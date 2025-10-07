@@ -2,7 +2,8 @@ package node
 
 import "time"
 
-// Conta i peer considerati "alive" nel failure window corrente.
+// conto quanti peer considero "alive" guardando il loro last-seen
+// entro la finestra del (failTimeout).
 func (n *Node) alivePeerCount() int {
 	n.PeerMgr.mu.Lock()
 	defer n.PeerMgr.mu.Unlock()
@@ -16,13 +17,13 @@ func (n *Node) alivePeerCount() int {
 	return cnt
 }
 
-// Ricalcola la soglia di quorum come majority di (peer alive + me).
+// ricalcolo la soglia come majority di (peer alive + me).
 func (n *Node) updateQuorum() {
-	size := n.alivePeerCount() + 1 // includi il nodo locale
+	size := n.alivePeerCount() + 1 // includo me stesso
 	n.quorumThreshold = size/2 + 1
 }
 
-// Restituisce la lista degli indirizzi "alive" (entro failTimeout).
+// restituisco la lista degli indirizzi "alive" (entro failTimeout).
 func (n *Node) alivePeers() []string {
 	n.PeerMgr.mu.Lock()
 	defer n.PeerMgr.mu.Unlock()

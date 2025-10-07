@@ -8,30 +8,33 @@ import (
 	"time"
 )
 
-// Parametri gossip (B,F,T) incapsulati
+// incapsulo i tre parametri del gossip per i rumor (B,F,T).
+// Mi serve per passare/leggere set atomici senza spargere singoli int in giro.
 type RumorParams struct {
-	Fanout      int // B
-	MaxForwards int // F
-	TTL         int // T
+	Fanout      int // B: quanti destinatari scelgo a ogni emissione
+	MaxForwards int // F: quante volte è concesso inoltrare un rumor
+	TTL         int // T: budget di hop massimo
 }
 
 type FailureDetector struct {
-	mu             sync.Mutex
-	peers          *PeerManager
-	reg            *ServiceRegistry // può restare anche se non usata
-	gossip         *GossipManager
-	suspectTimeout time.Duration
-	failTimeout    time.Duration
+	mu    sync.Mutex
+	peers *PeerManager // da qui leggo last-seen dei peer (SnapshotLastSeen ecc.)
 
-	suspected  map[string]bool // peer → già gossipato SuspectRumor
-	suppressed map[string]bool // peer → già gossipato DeadRumor / rimosso
+	gossip         *GossipManager // mi serve per inviare i rumor via UDP
+	suspectTimeout time.Duration  // soglia per marcare SUSPECT
+	failTimeout    time.Duration  // soglia oltre cui lascio la decisione DEAD al Node (quorum)
 
-	stopCh  chan struct{}
-	fanoutB int
+	suspected  map[string]bool // peer → ho già gossipato un SuspectRumor per lui (debounce)
+	suppressed map[string]bool // peer → non emetto più rumor (dopo DEAD/LEAVE o suppression esplicita)
+
+	stopCh  chan struct{} // canale di stop per la goroutine interna
+	fanoutB int           // copia interna dei parametri rumor (in byte-range)
 	maxFwF  int
 	ttlT    int
 }
 
+// mi assicuro che i (B,F,T) stiano in [1,255] perché li serializzo come uint8.
+// NB: imposto minimo 1 per evitare "B=0" che non invierebbe mai nulla.
 func clampByteRange(x int) int {
 	if x < 1 {
 		return 1
@@ -42,6 +45,7 @@ func clampByteRange(x int) int {
 	return x
 }
 
+// aggiorno B/F/T in modo thread-safe.
 func (fd *FailureDetector) SetRumorParams(p RumorParams) {
 	fd.mu.Lock()
 	fd.fanoutB = clampByteRange(p.Fanout)
@@ -50,21 +54,22 @@ func (fd *FailureDetector) SetRumorParams(p RumorParams) {
 	fd.mu.Unlock()
 }
 
-// Back-compat col codice esistente
+// alias per retro-compatibilità con il codice esistente.
 func (fd *FailureDetector) SetGossipParams(B, F, T int) {
 	fd.SetRumorParams(RumorParams{Fanout: B, MaxForwards: F, TTL: T})
 }
 
+// leggo una snapshot dei parametri attuali
 func (fd *FailureDetector) Params() RumorParams {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	return RumorParams{fd.fanoutB, fd.maxFwF, fd.ttlT}
 }
 
-func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager, suspectT, failT time.Duration) *FailureDetector {
+// costruisco l'FD con mappe inizializzate e timeouts passati dal chiamante.
+func NewFailureDetector(pm *PeerManager, gm *GossipManager, suspectT, failT time.Duration) *FailureDetector {
 	return &FailureDetector{
 		peers:          pm,
-		reg:            reg,
 		gossip:         gm,
 		suspectTimeout: suspectT,
 		failTimeout:    failT,
@@ -73,28 +78,32 @@ func NewFailureDetector(pm *PeerManager, reg *ServiceRegistry, gm *GossipManager
 	}
 }
 
-// ferma ogni futura segnalazione per peer
+// blocco qualsiasi futura segnalazione per il peer (niente più SUSPECT da parte mia).
+// Lo uso quando l'ho marcato DEAD (o ha fatto LEAVE) e non voglio flood duplicati.
 func (fd *FailureDetector) SuppressPeer(peer string) {
 	fd.mu.Lock()
 	fd.suppressed[peer] = true
-	delete(fd.suspected, peer)
+	delete(fd.suspected, peer) // pulisco anche l'eventuale stato SUSPECT
 	fd.mu.Unlock()
 }
 
-// riabilita peer (es. dopo un leave + heartbeat)
+// riabilito un peer (ad es. dopo che l'ho "rivisto" vivo).
+// Segno anche "Seen" per azzerare l'età e farlo uscire da eventuali finestre di timeout.
 func (fd *FailureDetector) UnsuppressPeer(peer string) {
 	fd.mu.Lock()
 	delete(fd.suppressed, peer)
 	delete(fd.suspected, peer)
 	fd.mu.Unlock()
-	// “Finge” di aver appena visto un heartbeat
-	fd.peers.Seen(peer)
+	fd.peers.Seen(peer) // fingo un heartbeat appena ricevuto
 }
 
-// helper: emetti un SuspectRumor con i parametri correnti
+// emitSuspect: genero e diffondo un SuspectRumor con i parametri correnti (B,F,T).
+// Evito di inviare al peer sospetto e faccio anche una self-vote via loopback per
+// attivare immediatamente il mio handler (utile a scalare velocemente il quorum).
 func (fd *FailureDetector) emitSuspect(peer string, now time.Time) {
 	p := fd.Params()
 
+	// Costruisco un rumor-id unico (peer + timestamp) giusto per dedup lato handler.
 	rumorID := fmt.Sprintf("suspect|%s|%d", peer, now.UnixNano())
 	sr := proto.SuspectRumor{
 		RumorID: rumorID,
@@ -105,10 +114,11 @@ func (fd *FailureDetector) emitSuspect(peer string, now time.Time) {
 	}
 	out, err := proto.Encode(proto.MsgSuspect, fd.gossip.self, sr)
 	if err != nil {
+		// se non riesco a encodare, non ho altro da fare qui
 		return
 	}
 
-	// targets = tutti i peer tranne il sospetto
+	// Target: tutti i peer tranne il sospetto.
 	all := fd.peers.List()
 	filtered := make([]string, 0, len(all))
 	for _, x := range all {
@@ -117,6 +127,7 @@ func (fd *FailureDetector) emitSuspect(peer string, now time.Time) {
 		}
 	}
 
+	// Calcolo B effettivo entro i limiti [1, len(filtered)]
 	B := p.Fanout
 	if B < 1 {
 		B = 1
@@ -124,36 +135,41 @@ func (fd *FailureDetector) emitSuspect(peer string, now time.Time) {
 	if B > len(filtered) {
 		B = len(filtered)
 	}
+
+	// Scelgo un sottoinsieme casuale di B target e invio il rumor.
 	for _, to := range randomSubset(filtered, B, fd.gossip.rnd) {
 		fd.gossip.SendUDP(out, to)
 	}
 	log.Printf("[FD] SUSPECT GOSSIP %s B=%d F=%d TTL=%d targets=%v", peer, p.Fanout, p.MaxForwards, p.TTL, filtered)
 
-	// self-vote via loopback (fa scattare subito il tuo handler MsgSuspect nel Node)
+	// Self-vote: invio il rumor a me stesso per triggherare subito il mio handler.
 	fd.gossip.SendUDP(out, fd.gossip.self)
 }
 
-// Avvia il monitoraggio dei peer, gossippando SuspectRumor.
+// avvio la goroutine periodica (tick 1s) che osserva i last-seen e
+// decide quando emettere i SUSPECT. La dichiarazione DEAD non la faccio qui:
+// la demanda il  basandosi su quorum (riduce falsi positivi).
 func (fd *FailureDetector) Start() {
 	fd.mu.Lock()
 	if fd.stopCh != nil {
 		fd.mu.Unlock()
-		return // già in esecuzione
+		return // già avviato
 	}
 	ch := make(chan struct{})
 	fd.stopCh = ch
 	fd.mu.Unlock()
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(1 * time.Second) // TODO: rendere configurabile e aggiungere jitter
 
 	go func(stop chan struct{}) {
 		defer ticker.Stop()
 		for {
 			select {
 			case now := <-ticker.C:
-				snap := fd.peers.SnapshotLastSeen() // copia consistente
+				// Prendo una snapshot consistente dei last-seen (no lock lungo).
+				snap := fd.peers.SnapshotLastSeen()
 				for peer, last := range snap {
-					// salta se soppresso
+					// Salto i peer soppressi (già marcati DEAD/LEAVE o temporaneamente esclusi).
 					fd.mu.Lock()
 					supp := fd.suppressed[peer]
 					fd.mu.Unlock()
@@ -163,7 +179,7 @@ func (fd *FailureDetector) Start() {
 
 					age := now.Sub(last)
 
-					// 1) rientrato (< suspectTimeout) → reset stato SUSPECT
+					// Caso 1: rientrato entro suspectTimeout → pulisco stato SUSPECT se presente.
 					if age <= fd.suspectTimeout {
 						fd.mu.Lock()
 						if fd.suspected[peer] {
@@ -174,10 +190,10 @@ func (fd *FailureDetector) Start() {
 						continue
 					}
 
-					// 2) finestra SUSPECT: (suspectTimeout, failTimeout]
+					// Caso 2: finestra SUSPECT: (suspectTimeout, failTimeout]
 					if age > fd.suspectTimeout && age <= fd.failTimeout {
 						fd.mu.Lock()
-						first := !fd.suspected[peer]
+						first := !fd.suspected[peer] // emetto al primo ingresso in finestra
 						if first {
 							fd.suspected[peer] = true
 						}
@@ -190,8 +206,6 @@ func (fd *FailureDetector) Start() {
 						continue
 					}
 
-					// 3) oltre failTimeout → qui non facciamo nulla:
-					// la conferma DEAD viene decisa via quorum nel Node.
 				}
 
 			case <-stop:
@@ -201,7 +215,7 @@ func (fd *FailureDetector) Start() {
 	}(ch)
 }
 
-// Ferma la goroutine del failure detector
+// Stop: fermo la goroutine periodica se è attiva.
 func (fd *FailureDetector) Stop() {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
@@ -211,7 +225,8 @@ func (fd *FailureDetector) Stop() {
 	}
 }
 
-// Imposta i timeouts (SUSPECT/FAIL) a runtime
+// consento di aggiornare le soglie a runtime (solo valori > 0).
+
 func (fd *FailureDetector) SetTimeouts(suspect, fail time.Duration) {
 	if suspect > 0 {
 		fd.suspectTimeout = suspect

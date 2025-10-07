@@ -8,27 +8,21 @@ import (
 	"time"
 )
 
-// =============================
-//  Helper condiviso (revival)
-// =============================
-
-// gestisce la guardia tombstone: se il meta remoto (epoch,ver)
-// è più nuovo del tombstone salvato, pulisce lo stato locale relativo al peer
-// (dead/leave/suspect visti) e unsuppress sul Failuredetector.
-// Ritorna true se si può applicare normalmente l’HB; false se va ignorato.
+// uso la "guardia tombstone" per gestire rientri.
 func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 	if eT, vT, hadTomb := n.Registry.TombMeta(peer); hadTomb {
-		// ignora se NON più nuovo del tombstone
+		// Se non è più nuovo del tombstone, ignoro l'HB (revival non valido)
 		if !(epoch > eT || (epoch == eT && ver > vT)) {
 			return false
 		}
-		// revival: pulizia + unsuppress
+		// Revival: pulisco stato locale e via le soppressioni
 		n.Registry.ClearTombMeta(peer)
 
 		n.rumorMu.Lock()
 		delete(n.handledDead, peer)
 		delete(n.seenLeave, peer)
 		n.suspectCount[peer] = 0
+		// pulisco tutte le tracce di rumor per quel peer
 		for id := range n.seenSuspect {
 			if strings.HasPrefix(id, "suspect|"+peer+"|") {
 				delete(n.seenSuspect, id)
@@ -44,7 +38,6 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 				delete(n.suspectSeenCnt, id)
 			}
 		}
-
 		n.rumorMu.Unlock()
 
 		n.FailureD.UnsuppressPeer(peer)
@@ -53,18 +46,15 @@ func (n *Node) applyRevivalIfNewer(peer string, epoch int64, ver uint64) bool {
 	return true
 }
 
-// =============================
-//  Handler: REPAIR request
-// =============================
-
-// invia indietro un Heartbeat full con la vista locale.
+// se sto imparando da HB (learnFromHB=true), rispondo a una RepairReq
+// con un HB full (epoch, ver, miei servizi, lista peer). Altrimenti loggo e ignoro.
 func (n *Node) handleRepairReq(env proto.Envelope) {
 	if !n.learnFromHB {
 		log.Printf("[REPAIR] request from %s ignorata (learnHB=false)", env.From)
 		return
 	}
 	if _, err := proto.DecodePayload[proto.RepairReq](env.Data); err != nil {
-		// payload malformato: ignoro
+		// Payload malformato: la ignoro in silenzio (best-effort)
 		return
 	}
 
@@ -79,19 +69,17 @@ func (n *Node) handleRepairReq(env proto.Envelope) {
 	log.Printf("[REPAIR] request from %s → sent HB(full) back", env.From)
 }
 
-// =============================
-//  Handler: Heartbeat (light)
-// =============================
-
+// applico revival guard; imparo peer via piggyback (saltando tombstoned);
+// se il meta remoto è più nuovo richiedo un REPAIR (solo se learnFromHB=true).
 func (n *Node) handleHeartbeatLight(env proto.Envelope, hbd proto.HeartbeatLight) {
 	peer := env.From
 
-	// guardia tombstone/riammissione
+	// Guardia tombstone/riammissione
 	if !n.applyRevivalIfNewer(peer, hbd.Epoch, hbd.SvcVer) {
 		return
 	}
 
-	// piggyback dei peer (salta quelli tombstoned/left)
+	// Piggyback: imparo peer "hint" saltando quelli tombstoned/left, sia lato Node che lato Registry
 	for _, p2 := range hbd.Peers {
 		if p2 == n.ID {
 			continue
@@ -108,7 +96,7 @@ func (n *Node) handleHeartbeatLight(env proto.Envelope, hbd proto.HeartbeatLight
 		n.PeerMgr.LearnFromPiggyback(p2)
 	}
 
-	// se il meta remoto è più nuovo, chiedi REPAIR solo se stai imparando da HB
+	// Se il meta remoto è più nuovo, chiedo un REPAIR (HB full) solo se sto imparando da HB
 	if e0, v0, ok := n.Registry.RemoteMeta(peer); !ok || hbd.Epoch > e0 || (hbd.Epoch == e0 && hbd.SvcVer > v0) {
 		if n.learnFromHB {
 			req := proto.RepairReq{Nonce: time.Now().UnixNano()}
@@ -119,26 +107,24 @@ func (n *Node) handleHeartbeatLight(env proto.Envelope, hbd proto.HeartbeatLight
 		}
 	}
 
-	// aggiorna vista locale
+	// Aggiorno vista locale e quorum
 	n.PeerMgr.Add(peer)
 	n.PeerMgr.Seen(peer)
 	n.updateQuorum()
 	log.Printf("HB(light) from %-12s peers=%v", peer, hbd.Peers)
 }
 
-// =============================
-//  Handler: Heartbeat (full)
-// =============================
-
+// come il light ma con servizi + lista peer completa.
+// Normalizzo i servizi, applico solo se epoch/ver sono nuovi e learnFromHB=true.
 func (n *Node) handleHeartbeatFull(env proto.Envelope, hb proto.Heartbeat) {
 	peer := env.From
 
-	// guardia tombstone/riammissione
+	// Guardia tombstone/riammissione
 	if !n.applyRevivalIfNewer(peer, hb.Epoch, hb.SvcVer) {
 		return
 	}
 
-	// piggyback dei peer (salta tombstoned/left)
+	// Piggyback: imparo peer dalla lista completa, saltando tombstoned/left
 	for _, p2 := range hb.Peers {
 		if p2 == n.ID {
 			continue
@@ -155,12 +141,12 @@ func (n *Node) handleHeartbeatFull(env proto.Envelope, hb proto.Heartbeat) {
 		n.PeerMgr.LearnFromPiggyback(p2)
 	}
 
-	// update vista locale e servizi
+	// Aggiorno vista locale e quorum
 	n.PeerMgr.Add(peer)
 	n.PeerMgr.Seen(peer)
 	n.updateQuorum()
 
-	// normalizza e filtra servizi validi
+	// Normalizzo servizi e filtro quelli validi
 	valid := make([]string, 0, len(hb.Services))
 	for _, s := range hb.Services {
 		s = strings.TrimSpace(strings.ToLower(s))
@@ -169,39 +155,33 @@ func (n *Node) handleHeartbeatFull(env proto.Envelope, hb proto.Heartbeat) {
 		}
 	}
 
-	// aggiorna registry solo se epoch/ver sono nuovi
-	// aggiorna registry solo se l'apprendimento da HB è abilitato
+	// Applico update servizi solo se:
+	// - sto imparando da HB
+	// - epoch/ver sono nuovi
 	if n.learnFromHB {
-		// aggiornamento solo se epoch/ver sono nuovi
 		if n.Registry.UpdateWithVersion(peer, valid, hb.Epoch, hb.SvcVer) {
 			log.Printf("HB(full)   from %-12s epoch=%d ver=%d services=%v peers=%v", peer, hb.Epoch, hb.SvcVer, valid, hb.Peers)
 		} else {
 			log.Printf("HB(full)   from %-12s ignorato (epoch/ver non nuovi)", peer)
 		}
 	} else {
-		// learning disabilitato: non memorizziamo mappa servizi da HB(full)
 		log.Printf("HB(full)   from %-12s learning DISABILITATO → salto update servizi (epoch=%d ver=%d)", peer, hb.Epoch, hb.SvcVer)
 	}
 }
 
-// =============================
-//  Handler: Lookup (deleghe)
-// =============================
-
+// Delego la logica di request/response al lookup man(tiene TTL, dedup, ecc.)
 func (n *Node) handleLookup(env proto.Envelope, lm *LookupManager) {
 	lm.HandleRequest(env)
 }
-
 func (n *Node) handleLookupResponse(env proto.Envelope, lm *LookupManager) {
 	lm.HandleResponse(env)
 }
 
-// =============================
-//  Handler: Suspect rumor
-// =============================
-
+// al primo avvisatmen ncremento il "voto" per quel peer; se raggiungo il quorum locale dichiaro DEAD (una volta sola),
+// emetto il DeadRumor e applico effetti locali (tombstone, remove, suppression, ecc.).
+// In ogni caso, se TTL>0, inoltro il rumor (TTL--), escludendo mittente e peer target.
 func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
-	// BLIND-COUNTER: incremento viste; stop oltre F
+	// Conteggio seen per rispetto F (MaxFw): se supero, mi fermo
 	n.rumorMu.Lock()
 	cnt := n.suspectSeenCnt[r.RumorID] + 1
 	n.suspectSeenCnt[r.RumorID] = cnt
@@ -214,7 +194,7 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 		return
 	}
 
-	// Prima vista? conta voto e verifica quorum → eventualmente emetti DEAD
+	// Prima vista  conto voto e controllo quorum
 	n.rumorMu.Lock()
 	first := !n.seenSuspect[r.RumorID]
 	if first {
@@ -225,13 +205,14 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 	need := n.quorumThreshold
 	n.rumorMu.Unlock()
 
+	// Se raggiungo quorum e non ho ancora marcato DEAD, applico DEAD una sola volta
 	if first && votes >= need && !n.handledDead[r.Peer] {
 		n.rumorMu.Lock()
 		n.handledDead[r.Peer] = true
 		n.rumorMu.Unlock()
 		log.Printf("Peer %s DEAD (quorum %d raggiunto)", r.Peer, need)
 
-		// costruiamo DEAD rumor e inoltriamo a B peer vivi (escludi morto)
+		// DeadRumor verso B peer vivi (escludo il morto)
 		tsNow := time.Now().UnixNano()
 		d := proto.DeadRumor{
 			RumorID: fmt.Sprintf("dead|%s|%d", r.Peer, tsNow),
@@ -241,20 +222,11 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 			TTL:     uint8(n.fdT),
 		}
 		outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
-
-		targets := exclude(n.alivePeers(), r.Peer)
-		B := n.fdB
-		if B < 1 {
-			B = 1
-		}
-		if B > len(targets) {
-			B = len(targets)
-		}
-		for _, p := range randomSubset(targets, B, n.GossipM.rnd) {
+		for _, p := range n.pickTargets(exclude(n.alivePeers(), r.Peer), n.fdB) {
 			n.GossipM.SendUDP(outD, p)
 		}
 
-		// effetti locali di DEAD (con tombstone meta per guardia revival)
+		// Effetti locali + tombstone meta per guardia revival
 		if e, v, ok := n.Registry.RemoteMeta(r.Peer); ok {
 			n.Registry.SaveTombMeta(r.Peer, e, v)
 		}
@@ -266,7 +238,7 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 		delete(n.suspectCount, r.Peer)
 	}
 
-	// Forward per-hop (GOSSIP) con TTL--
+	// Forward per-hop (TTL--)
 	if r.TTL > 0 {
 		r.TTL--
 		outS, _ := proto.Encode(proto.MsgSuspect, n.ID, r)
@@ -276,28 +248,24 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 		}
 		log.Printf("fwd SUSPECT %s TTL=%d B=%d seen=%d/%d", r.Peer, r.TTL, len(targets), cnt, r.MaxFw)
 	}
-
 }
 
-// =============================
-//  Handler: Dead rumor
-// =============================
-
+// rispetto F, applico una sola volta gli effetti locali (se per me non è "fresco"),
+// poi inoltro se TTL>0. Uso la "freschezza" per evitare di uccidere peer che ho visto da pochissimo.
 func (n *Node) handleDead(env proto.Envelope, d proto.DeadRumor) {
-	// Filtro freschezza: se per me il peer è “fresco”, non applico (solo forward)
+	// Filtro freschezza: se l'ho visto di recente (prima di suspectTimeout), non applico (solo forward)
 	apply := true
 	if last, ok := n.PeerMgr.GetLastSeen(d.Peer); ok && time.Since(last) < n.FailureD.suspectTimeout {
 		apply = false
 	}
 
-	// BLIND-COUNTER + rispetto di F
+	// Conteggio cieco e rispetto MaxFw
 	n.rumorMu.Lock()
 	cnt := n.deadSeenCnt[d.RumorID] + 1
 	n.deadSeenCnt[d.RumorID] = cnt
 	alreadyLeft := n.seenLeave[d.Peer]
 	alreadyDead := n.handledDead[d.Peer]
 	n.rumorMu.Unlock()
-
 	if d.MaxFw > 0 && cnt > d.MaxFw {
 		return
 	}
@@ -306,7 +274,7 @@ func (n *Node) handleDead(env proto.Envelope, d proto.DeadRumor) {
 	if apply && !alreadyLeft && !alreadyDead && cnt == 1 {
 		log.Printf("DEAD %s — rumor da %s (%s)", d.Peer, env.From, d.RumorID)
 
-		// effetti locali + tombstone meta
+		// Effetti locali + tombstone
 		if e, v, ok := n.Registry.RemoteMeta(d.Peer); ok {
 			n.Registry.SaveTombMeta(d.Peer, e, v)
 		}
@@ -321,7 +289,7 @@ func (n *Node) handleDead(env proto.Envelope, d proto.DeadRumor) {
 		n.rumorMu.Unlock()
 	}
 
-	// Forward GOSSIP per-hop (TTL--)
+	// Forward se ho ancora TTL
 	if d.TTL > 0 {
 		d.TTL--
 		outD, _ := proto.Encode(proto.MsgDead, n.ID, d)
@@ -331,13 +299,10 @@ func (n *Node) handleDead(env proto.Envelope, d proto.DeadRumor) {
 		}
 		log.Printf("fwd DEAD %s TTL=%d B=%d seen=%d/%d", d.Peer, d.TTL, len(targets), cnt, d.MaxFw)
 	}
-
 }
 
-// =============================
-//  Handler: Leave rumor
-// =============================
-
+// applico una sola volta, salvo tombstone per revival guard,
+// rimuovo peer e sopprimo FD; rispetto MaxFw e TTL durante il forward.
 func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 	peer := lv.Peer
 	rid := lv.RumorID
@@ -345,13 +310,14 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 		rid = fmt.Sprintf("leave|%s|%d|", peer, time.Now().UnixNano())
 	}
 
+	// Seen count per F, e prima volta segno seenLeave[peer]=true
 	n.rumorMu.Lock()
 	cnt := n.leaveSeenCnt[rid] + 1
 	n.leaveSeenCnt[rid] = cnt
 	already := n.seenLeave[peer]
 	if !already {
 		n.seenLeave[peer] = true
-		// salva meta per guardia di revival
+		// Salvo meta per guardia revival
 		if e, v, ok := n.Registry.RemoteMeta(peer); ok {
 			n.Registry.SaveTombMeta(peer, e, v)
 		}
@@ -362,7 +328,7 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 		return
 	}
 
-	// Apply-once (prima volta che lo vedo)
+	// Apply-once
 	if !already && cnt == 1 {
 		n.PeerMgr.Remove(peer)
 		n.FailureD.SuppressPeer(peer)
@@ -382,5 +348,4 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 		}
 		log.Printf("fwd LEAVE %s TTL=%d B=%d seen=%d/%d", peer, lv.TTL, len(targets), cnt, lv.MaxFw)
 	}
-
 }
