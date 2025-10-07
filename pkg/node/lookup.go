@@ -148,6 +148,7 @@ func (lm *LookupManager) HandleRequest(env proto.Envelope) {
 
 	// Se sono provider, rispondo (solo la prima volta che vedo quell’ID)
 	if provider, ok := lm.reg.Lookup(lr.Service); ok {
+
 		if seen == 1 {
 			resp := proto.LookupResponse{ID: lr.ID, Provider: provider}
 			out, _ := proto.Encode(proto.MsgLookupResponse, lm.gossip.self, resp)

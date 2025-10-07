@@ -4,57 +4,6 @@ docker compose logs -f node1
 docker kill --signal SIGKILL node2
 
 
-
-# 1) in una shell
-docker compose up -d
-while true; do docker compose logs -f --since=1s; done
-
-# 2) in un’altra shell: killa e fai rientrare un nodo
-docker kill node2
-# (o il tuo script di crash/rientro)
-
-
-per rimuovere processi in uso:
-docker ps -a --filter network=progettosdcc_default
-docker rm $(docker ps -a --filter network=progettosdcc_default -q)
-docker network rm progettosdcc_default
-
-docker compose build
-docker compose up -d registry node1 node2 node3 node4 node5
-
-
-
-
-
-
-
-per toglierlo
-docker rm -f node6
-
-
-
-
- docker run --rm   --network progettosdcc_default   --name client --hostname client   --entrypoint "" progettosdcc-node1   /usr/local/bin/gossip-node     --id=client:9004     --port=9004     --peers=node1:9001,node2:9002,node3:9003     --lookup=payments
-
-
-
-
- peers.go: gestione thread-safe dei peer
-
- registry.go: tabella servizi + lookup
-
- digest.go: calcolo e confronto digest
-
- msgfactory.go: costruzione heartbeat con digest
-
- gossip.go: invio selettivo di heartbeat solo se il digest è cambiato
-
- failure.go: rimozione peer morti
-
- node.go: orchestri tutto e fornisci l’entrypoint
-
-
-
  killare in maniera forzata
  # prendi TUTTI gli id dei container incriminati (nome che inizia per node o registry)
   # per ciascun id estrai il PID host
@@ -97,18 +46,6 @@ docker compose run --rm --no-deps --name client2 \
 
 
 
-docker compose up -d --build
-
-
-stop=false; trap 'stop=true' INT TERM
-while :; do
-  docker compose logs -f --since=1s --tail=0 || true
-  $stop && break
-  sleep 0.5
-done
-
-
-
 # crash
 docker compose kill node2            # (o docker kill node2)
 
@@ -120,10 +57,9 @@ docker compose start node1
 
 #ricerca con learn from lookup disattivato
  docker compose run --rm --no-deps --name client2 \
-  -e SDCC_LOOKUP_TTL=3 \
-  -e SDCC_LEARN_FROM_HB=false \
-  -e SDCC_LEARN_FROM_LOOKUP=true \
-  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=sum
+  -e SDCC_LEARN_FROM_HB=true \
+  -e SDCC_LEARN_FROM_LOOKUP=false\
+  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
 
 
   #
@@ -134,7 +70,7 @@ docker compose start node1
 #ricerca
  docker compose run --rm --no-deps --name client2 \
   -e SDCC_LEARN_FROM_LOOKUP=true \
-  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=sum
+  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
 
 
    docker compose run --rm --no-deps --name client2 \
@@ -150,9 +86,26 @@ docker compose start node1
    --services=add \
    --svc-ctrl=/tmp/services.ctrl
 
+#inserire nodo con registry
+ docker compose run -d --no-deps --name node6 node1 \
+   --id=node6:9006 --port=9006 \
+   --registry=registry:9000\
+   --services=add \
+   --svc-ctrl=/tmp/services.ctrl
 
 #per esperimenti
-docker compose down --remove-orphans
-docker compose -f docker-compose.yml -f docker-compose.exp2.yml --profile exp2 up --build
-docker compose -f docker-compose.yml -f docker-compose.exp2.yml --profile exp2 down --remove-orphans
+
+
+#E1
+docker compose down -v
+docker compose -f docker-compose.yml -f experiments/E1.yml up -d registry node1 node2 node3 node4 node5
+docker compose -f docker-compose.yml -f experiments/E1.yml run --rm client
+
+
+#E2
+docker compose down -v
+docker compose -f docker-compose.yml -f experiments/E2.yml up -d registry node1 node2 node3 node4 node5
+docker compose -f docker-compose.yml -f experiments/E2.yml run --rm client
+
+
 

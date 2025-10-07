@@ -17,7 +17,7 @@ func randomSubset(peers []string, k int, rnd *rand.Rand) []string {
 	return out[:k]
 }
 
-// filtro 'src' rimuovendo gli elementi in 'bad' (lookup O(1) via mappa).
+// filtro 'src' rimuovendo gli elementi in 'bad'
 func exclude(src []string, bad ...string) []string {
 	if len(src) == 0 {
 		return src

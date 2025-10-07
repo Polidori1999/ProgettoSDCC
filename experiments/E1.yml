@@ -1,0 +1,26 @@
+x-exp-env: &exp-env
+  SDCC_LEARN_FROM_HB: "true"
+  SDCC_LEARN_FROM_LOOKUP: "true"
+  SDCC_REPAIR_ENABLED: "false"
+  SDCC_HB_LIGHT_EVERY: "3s"
+  SDCC_HB_FULL_EVERY: "9s"
+  SDCC_SUSPECT_TIMEOUT: "20s"
+  SDCC_DEAD_TIMEOUT: "25s"
+  SDCC_FD_B: "2"
+  SDCC_FD_F: "2"
+  SDCC_FD_T: "3"
+  SDCC_LOOKUP_TTL: "3"
+  SDCC_NEG_CACHE_TTL: "30s"
+
+services:
+  node1: { environment: *exp-env }
+  node2: { environment: *exp-env }
+  node3: { environment: *exp-env }
+  node4: { environment: *exp-env }
+  node5: { environment: *exp-env }
+
+  client:
+    environment: *exp-env
+    # piccolo sleep per lasciare formare l’overlay e ricevere HB(full)
+    entrypoint: ["sh","-lc","sleep 15; exec gossip-node \"$@\""]
+    command: ["--id=client:9009","--port=9009","--registry=registry:9000","--lookup=sub"]

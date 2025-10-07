@@ -1,0 +1,39 @@
+# Esperimento E2 — "no learn from HB"
+# Obiettivo: mostrare che senza apprendimento via HB(full),
+# solo i provider conoscono i propri servizi, quindi la lookup
+# spesso fallisce (timeout) perché gli altri nodi non possono rispondere.
+
+x-exp-env: &exp-env
+  SDCC_LEARN_FROM_HB: "true"          # disattiva apprendimento da HB(full)
+  SDCC_LEARN_FROM_LOOKUP: "true"       # il client può comunque imparare dalla risposta
+  SDCC_REPAIR_ENABLED: "false"         # niente anti-entropy
+  SDCC_HB_LIGHT_EVERY: "3s"
+  SDCC_HB_FULL_EVERY: "10s"
+  SDCC_SUSPECT_TIMEOUT: "25s"
+  SDCC_DEAD_TIMEOUT: "32s"
+  SDCC_FD_B: "2"
+  SDCC_FD_F: "2"
+  SDCC_FD_T: "3"                 # budget dedup
+  SDCC_LOOKUP_TTL: "3"                 # TTL rumor limitato
+  SDCC_NEG_CACHE_TTL: "30s"
+
+services:
+  # Tutti i nodi partecipano al gossip ma NON imparano servizi dagli HB(full)
+  node1: { environment: *exp-env }
+  node2: { environment: *exp-env }
+  node3: { environment: *exp-env }     # node3 è il provider di "div"
+  node4: { environment: *exp-env }
+  node5: { environment: *exp-env }
+
+  client:
+    environment: *exp-env
+    entrypoint:
+      # Sleep di 15s per lasciar propagare HB(light) e costruire overlay minimo
+      - sh
+      - -c
+      - |
+        echo "[E2] Attendo overlay..."; sleep 15;
+        exec gossip-node --id=client:9009 \
+          --port=9009 \
+          --registry=registry:9000 \
+          --lookup=div
