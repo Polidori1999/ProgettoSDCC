@@ -1,8 +1,8 @@
 Progetto di Service Discovery e Failure Detection basato su Protocollo Gossip
 ============================================================================
-Questo progetto è un'implementazione di un sistema di **service discovery** e **failure detection** decentralizzato per il corso di **Sistemi Distribuiti e Cloud Computing**. Il sistema utilizza un protocollo **Gossip (push–pull)** per permettere a un cluster di nodi di mantenere una visione condivisa e aggiornata dei membri attivi, rilevando guasti e uscite in modo resiliente.
+Questo progetto è un'implementazione di un sistema di **service discovery** e **failure detection** decentralizzato per il corso di **Sistemi Distribuiti e Cloud Computing**. I nodi si organizzano tramite **Gossip (push–pull)**, rilevano crash/leave con **rumor spreading (B/F/TTL)** e riparano gap con **anti-entropy**. Il tutto è containerizzato con **Docker** e orchestrato con **Docker Compose**.
 
-L'implementazione è realizzata in **Go (Golang)**, utilizza **gRPC** per la comunicazione tra i nodi ed è orchestrata tramite **Docker** e **Docker Compose** per una facile gestione e deployment.
+L'implementazione è realizzata in **Go (Golang)** ed è orchestrata tramite **Docker** e **Docker Compose** per una facile gestione e deployment.
 
 Caratteristiche Principali
 --------------------------
@@ -25,4 +25,82 @@ Per eseguire il progetto servono:
 Come Avviare il Progetto (con Docker Compose)
 ---------------------------------------------
 1. Clona il repository:
-   
+   git clone https://github.com/Polidori1999/ProgettoSDCC.git
+Build & up (registry + 5 nodi + un client dimostrativo):
+   docker compose up --build -d
+Log di un nodo:
+   docker compose logs -f node1
+Stop di un nodo:
+   docker compose stop node2
+Crash di un nodo:
+   docker kill --signal SIGKILL node2
+Riavviare un nodo:
+   docker compose start node2
+Stop e cleanup:
+   docker compose down --remove-orphans
+
+⚙️ Flag CLI principali (binario gossip-node)
+
+--id (obbligatorio): identificatore host:port del nodo (es. node1:9001)
+
+--port (default 8000): porta UDP locale su cui ascoltare gossip/HB
+
+--registry: host:port del registry (opzionale)
+
+--peers: lista iniziale di peer, CSV (host:port,host:port)
+
+--services: lista servizi esposti localmente, CSV (sum,sub,...)
+
+--svc-ctrl: path file di controllo servizi (es. /tmp/services.ctrl)
+
+--lookup: se valorizzato, il nodo esegue lookup + invocazione del servizio e termina
+
+I servizi integrati sono: sum, sub, mul, div.
+
+Avviare un client per lookup
+    docker compose run --rm --no-deps --name client2 \
+  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
+
+Inserimento di un nodo passando per il registry
+#inserire nodo con registry
+ docker compose run -d --no-deps --name node6 node1 \
+   --id=node6:9006 --port=9006 \
+   --registry=registry:9000\
+   --services=add \
+   --svc-ctrl=/tmp/services.ctrl
+
+Inserimento nodo senza registry
+ docker compose run -d --no-deps --name node6 node1 \
+   --id=node6:9006 --port=9006 \
+   --peers=node2:9002 \
+   --services=add \
+   --svc-ctrl=/tmp/services.ctrl
+
+
+Parametri configurabili
+=== Rumor-mongering (FD) ===
+SDCC_FD_B=3  
+SDCC_FD_F=2
+SDCC_FD_T=3
+
+=== Heartbeats ===
+SDCC_HB_LIGHT_EVERY=3s
+SDCC_HB_FULL_EVERY=9s
+
+=== Failure detector timeouts ===
+SDCC_SUSPECT_TIMEOUT=20s
+SDCC_DEAD_TIMEOUT=30s
+
+=== Repair push–pull ===
+SDCC_REPAIR_ENABLED=false
+SDCC_REPAIR_EVERY=30s
+
+=== Lookup ===
+SDCC_LOOKUP_TTL=3
+SDCC_LEARN_FROM_LOOKUP=true
+SDCC_LEARN_FROM_HB=true
+
+=== RPC (parametri dei servizi) ===
+SDCC_RPC_A=18
+SDCC_RPC_B=3
+
