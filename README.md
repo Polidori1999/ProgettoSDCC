@@ -41,7 +41,7 @@ Come Avviare il Progetto (con Docker Compose)
    ```bash
    docker compose stop node2  
 5. Crash di un nodo:  
-`   ``bash
+   ```bash
    docker kill --signal SIGKILL node2
 6. Riavviare un nodo:
    ```bash
@@ -68,14 +68,15 @@ Come Avviare il Progetto (con Docker Compose)
 --lookup: se valorizzato, il nodo esegue lookup + invocazione del servizio e termina
 
 I servizi integrati sono: sum, sub, mul, div.
-
-Avviare un client per lookup
+-----------------
+1. Avviare un client per lookup
+   ```bash
     docker compose run --rm --no-deps --name client2 \
-  client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
+   client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
 
-Inserimento di un nodo passando per il registry
-#inserire nodo con registry
- docker compose run -d --no-deps --name node6 node1 \
+2. Inserimento di un nodo passando per il registry
+   ```bash
+    docker compose run -d --no-deps --name node6 node1 \
    --id=node6:9006 --port=9006 \
    --registry=registry:9000\
    --services=add \
