@@ -12,7 +12,6 @@ Caratteristiche Principali
 - **Service Discovery a runtime**: aggiunta/rimozione servizi tramite file/pipe di controllo (`--svc-ctrl`, es. `/tmp/services.ctrl`) con propagazione gossip.
 - **Failure Detection configurabile**: timeouts/soglie regolabili; rilevazione di **crash** e **leave** con disseminazione rapida dello stato.
 - **Resilienza e self-healing**: tolleranza a crash dei nodi (inclusi i seed), reintegro automatico, convergenza in presenza di churn.
-- **gRPC + Protobuf**: interfaccia binaria stabile e messaggi compatti; compatibile con più linguaggi.
 - **Containerizzazione e repliche esperimenti**: immagini Docker e Compose; scenari riproducibili `experiments/E1.yml` e `experiments/E2.yml`.
 
 Prerequisiti
