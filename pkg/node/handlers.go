@@ -194,6 +194,15 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 		return
 	}
 
+	// 1) Se l'ho visto di recente, non considero il voto (e non forwardo il rumor).
+	if last, ok := n.PeerMgr.GetLastSeen(r.Peer); ok && time.Since(last) < n.FailureD.suspectTimeout/2 {
+		return
+	}
+	// 2) Probe rapida best-effort: invio un RepairReq al target e aspetto un breve ack indiretto
+	//    (il target risponde con HB(full) grazie a handleRepairReq → aggiorna LastSeen).
+	if n.quickProbe(r.Peer, 400*time.Millisecond) {
+		return
+	}
 	// Prima vista  conto voto e controllo quorum
 	n.rumorMu.Lock()
 	first := !n.seenSuspect[r.RumorID]
@@ -207,6 +216,10 @@ func (n *Node) handleSuspect(env proto.Envelope, r proto.SuspectRumor) {
 
 	// Se raggiungo quorum e non ho ancora marcato DEAD, applico DEAD una sola volta
 	if first && votes >= need && !n.handledDead[r.Peer] {
+		// Ulteriore guardia di "freschezza": se per me è fresco, non promuovo a DEAD.
+		if last, ok := n.PeerMgr.GetLastSeen(r.Peer); ok && time.Since(last) < n.FailureD.suspectTimeout {
+			return
+		}
 		n.rumorMu.Lock()
 		n.handledDead[r.Peer] = true
 		n.rumorMu.Unlock()
@@ -347,5 +360,35 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 			n.GossipM.SendUDP(outL, p)
 		}
 		log.Printf("fwd LEAVE %s TTL=%d B=%d seen=%d/%d", peer, lv.TTL, len(targets), cnt, lv.MaxFw)
+	}
+}
+
+// quickProbe invia un RepairReq al target e attende per un breve intervallo
+// che il LastSeen del target avanzi (segno che ci ha risposto con un HB(full)).
+// Restituisce true se ha avuto segni di vita entro 'wait'.
+func (n *Node) quickProbe(target string, wait time.Duration) bool {
+	// Timestamp di riferimento
+	t0, _ := n.PeerMgr.GetLastSeen(target)
+
+	// RepairReq come "ping" best-effort
+	req := proto.RepairReq{Nonce: time.Now().UnixNano()}
+	out, _ := proto.Encode(proto.MsgRepairReq, n.ID, req)
+	n.GossipM.SendUDP(out, target)
+
+	deadline := time.Now().Add(wait)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if time.Now().After(deadline) {
+			return false
+		}
+		<-ticker.C
+		if ts, ok := n.PeerMgr.GetLastSeen(target); ok {
+			// Avanzato rispetto a prima ed entro la finestra "sano" → vivo
+			if ts.After(t0) && time.Since(ts) < n.FailureD.suspectTimeout {
+				return true
+			}
+		}
 	}
 }

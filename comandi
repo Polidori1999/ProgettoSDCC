@@ -25,15 +25,15 @@ done
 
 
 
-
-sudo aa-remove-unknown        # pulisce i profili zombie
+# pulisce i profili zombie
+sudo aa-remove-unknown
 sudo systemctl restart docker
 
 
 
 aggiungere o rimuovere servizi
 
-docker exec node2 sh -c 'echo "ADD sum" >> /tmp/services.ctrl'
+docker exec node1 sh -c 'echo "ADD sum" >> /tmp/services.ctrl'
 docker exec node2 sh -c 'echo "DEL sub" >> /tmp/services.ctrl'
 
 
@@ -69,7 +69,6 @@ docker compose start node1
 
 #ricerca
  docker compose run --rm --no-deps --name client2 \
-  -e SDCC_LEARN_FROM_LOOKUP=true \
   client --id=client2:9010 --port=9010 --registry=registry:9000 --lookup=div
 
 

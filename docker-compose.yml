@@ -58,7 +58,7 @@ services:
   client:
     <<: *node-common
     container_name: client
-    # serve solo che node1 abbia buildato l'immagine; registry è facoltativo
+    # serve solo che node1 abbia buildato l'immagine
     depends_on: [node1, registry]
     entrypoint: ["gossip-node"]
     command: ["--id=client:9009","--port=9009","--registry=registry:9000","--lookup=sub"]
