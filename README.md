@@ -24,21 +24,33 @@ Per eseguire il progetto servono:
 - 
 Come Avviare il Progetto (con Docker Compose)
 ---------------------------------------------
+
 1. Clona il repository:
+
+   ```bash
    git clone https://github.com/Polidori1999/ProgettoSDCC.git
-Build & up (registry + 5 nodi + un client dimostrativo):
+
+2. Build & up (registry + 5 nodi + un client dimostrativo):  
+   ```bash
    docker compose up --build -d
-Log di un nodo:
-   docker compose logs -f node1
-Stop di un nodo:
-   docker compose stop node2
-Crash di un nodo:
+
+3. Log di un nodo:
+   ```bash
+   docker compose logs -f node1  
+4. Stop di un nodo:
+   ```bash
+   docker compose stop node2  
+5. Crash di un nodo:  
+`   ``bash
    docker kill --signal SIGKILL node2
-Riavviare un nodo:
+6. Riavviare un nodo:
+   ```bash
    docker compose start node2
-Stop e cleanup:
+7. Stop e cleanup:
+   ```bash
    docker compose down --remove-orphans
 
+   ------------
 ⚙️ Flag CLI principali (binario gossip-node)
 
 --id (obbligatorio): identificatore host:port del nodo (es. node1:9001)
