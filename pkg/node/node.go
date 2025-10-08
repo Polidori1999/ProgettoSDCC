@@ -127,8 +127,8 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		learnFromHB: true, // default: imparo dai full-HB
 
 		// Nota: questi due li tengo costanti salvo override altrove
-		tickCluster:    10 * time.Second,
-		clientDeadline: 8 * time.Second,
+		tickCluster:    cfg.ClusterLogEvery,
+		clientDeadline: cfg.ClientDeadline,
 	}
 	// Calcolo soglia quorum in base ai peer iniziali
 	n.updateQuorum()

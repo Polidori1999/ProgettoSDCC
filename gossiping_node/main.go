@@ -133,13 +133,14 @@ func main() {
 
 	// Carico la configurazione da .env / variabili d'ambiente (evito costanti hardcoded)
 	cfg := config.Load()
-	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f)",
+	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f) clusterLog=%v clientDeadline=%v",
 		cfg.HBLightEvery, cfg.HBFullEvery,
 		cfg.SuspectTimeout, cfg.DeadTimeout,
 		cfg.FDB, cfg.FDF, cfg.FDT,
 		cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
 		cfg.RepairEnabled, cfg.RepairEvery,
 		cfg.RPCA, cfg.RPCB,
+		cfg.ClusterLogEvery, cfg.ClientDeadline,
 	)
 
 	// Creo il nodo con ID, peers iniziali (CSV) e servizi locali (CSV)
