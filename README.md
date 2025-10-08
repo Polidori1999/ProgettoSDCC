@@ -20,7 +20,7 @@ Per eseguire il progetto servono:
 - **Git** per clonare il repository.
 - **Docker** (consigliato ≥ 24) e **Docker Compose v2** (`docker compose ...`).
 - **Go** (≥ 1.23) **solo** se vuoi lanciare senza Docker.
-- 
+  
 Come Avviare il Progetto (con Docker Compose)
 ---------------------------------------------
 
@@ -81,14 +81,15 @@ I servizi integrati sono: sum, sub, mul, div.
    --services=add \
    --svc-ctrl=/tmp/services.ctrl
 
-Inserimento nodo senza registry
- docker compose run -d --no-deps --name node6 node1 \
+3. Inserimento nodo senza registry
+    ```bash
+    docker compose run -d --no-deps --name node6 node1 \
    --id=node6:9006 --port=9006 \
    --peers=node2:9002 \
    --services=add \
    --svc-ctrl=/tmp/services.ctrl
 
-
+--------
 Parametri configurabili
 === Rumor-mongering (FD) ===
 SDCC_FD_B=3  
@@ -115,4 +116,24 @@ SDCC_LEARN_FROM_HB=true
 === RPC (parametri dei servizi) ===
 SDCC_RPC_A=18
 SDCC_RPC_B=3
+
+---------
+Esperimenti
+1. Per lanciare il primo esperimento per la ricerca di un servizio
+    ```bash
+    docker compose down -v
+   docker compose -f docker-compose.yml -f experiments/E1.yml up -d registry node1 node2 node3 node4 node5
+   docker compose -f docker-compose.yml -f experiments/E1.yml run --rm client
+2. Per lanciare esperimento No learn from hb
+   ```bash
+   docker compose down -v   
+   docker compose -f docker-compose.yml -f experiments/E2.yml up -d registry node1 node2 node3 node4 node5
+   docker compose -f docker-compose.yml -f experiments/E2.yml run --rm client
+
+---------
+Comandi utili:
+1. Rimozione profili zombie
+   ```bash
+   sudo aa-remove-unknown        
+   sudo systemctl restart docker
 
