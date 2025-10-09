@@ -19,7 +19,7 @@ Prerequisiti
 Per eseguire il progetto servono:
 - **Git** per clonare il repository.
 - **Docker** (consigliato ≥ 24) e **Docker Compose v2** (`docker compose ...`).
-- **Go** (≥ 1.23) **solo** se vuoi lanciare senza Docker.
+- **Go** (≥ 1.23).
   
 Come Avviare il Progetto (con Docker Compose)
 ---------------------------------------------
@@ -54,7 +54,7 @@ Come Avviare il Progetto (con Docker Compose)
 
 --id (obbligatorio): identificatore host:port del nodo (es. node1:9001)
 
---port (default 8000): porta UDP locale su cui ascoltare gossip/HB
+--port: porta UDP locale su cui ascoltare gossip/HB
 
 --registry: host:port del registry (opzionale)
 
@@ -67,6 +67,8 @@ Come Avviare il Progetto (con Docker Compose)
 --lookup: se valorizzato, il nodo esegue lookup + invocazione del servizio e termina
 
 I servizi integrati sono: sum, sub, mul, div.
+
+
 -----------------
 1. Avviare un client per lookup
    ```bash
@@ -78,7 +80,7 @@ I servizi integrati sono: sum, sub, mul, div.
     docker compose run -d --no-deps --name node6 node1 \
    --id=node6:9006 --port=9006 \
    --registry=registry:9000\
-   --services=add \
+   --services=sum \
    --svc-ctrl=/tmp/services.ctrl
 
 3. Inserimento nodo senza registry
@@ -86,9 +88,13 @@ I servizi integrati sono: sum, sub, mul, div.
     docker compose run -d --no-deps --name node6 node1 \
    --id=node6:9006 --port=9006 \
    --peers=node2:9002 \
-   --services=add \
+   --services=sum \
    --svc-ctrl=/tmp/services.ctrl
 
+4. Inserimento o rimozione servizi
+   ```bash
+   docker exec node1 sh -c 'echo "ADD sub" >> /tmp/services.ctrl'
+   docker exec node2 sh -c 'echo "DEL sub" >> /tmp/services.ctrl'
 --------
 Parametri configurabili
 
