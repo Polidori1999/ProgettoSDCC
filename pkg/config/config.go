@@ -28,16 +28,21 @@ type Config struct {
 	RepairEvery   time.Duration // frequenza del repair
 
 	// --- Lookup ---
-	LookupTTL       int           // TTL delle richieste di lookup
-	LearnFromLookup bool          // se true, imparo i provider osservando le risposte
-	LearnFromHB     bool          // se true, imparo i provider dai full-HB
-	ClientDeadline  time.Duration // deadline del client one-shot (lookup)
+	LookupTTL         int           // TTL delle richieste di lookup
+	LearnFromLookup   bool          // se true, imparo i provider osservando le risposte
+	LearnFromHB       bool          // se true, imparo i provider dai full-HB
+	ClientDeadline    time.Duration // deadline del client one-shot (lookup)
+	LookupNegCacheTTL time.Duration
 
 	// --- Parametri RPC di esempio (servizi aritmetici) ---
 	RPCA float64
 	RPCB float64
 
 	ClusterLogEvery time.Duration // quanto spesso loggare lo stato cluster
+
+	RegistryMaxAttempts int // tentativi di bootstrap dal registry
+
+	HBLightMaxHints int // <-- NUOVO: max peer hints nei light-HB
 
 }
 
@@ -107,15 +112,20 @@ func Load() Config {
 		RepairEnabled: envBool("SDCC_REPAIR_ENABLED", false),
 		RepairEvery:   envDuration("SDCC_REPAIR_EVERY", 30*time.Second),
 
-		LookupTTL:       envInt("SDCC_LOOKUP_TTL", 3),
-		LearnFromLookup: envBool("SDCC_LEARN_FROM_LOOKUP", true),
-		LearnFromHB:     envBool("SDCC_LEARN_FROM_HB", true),
-		ClientDeadline:  envDuration("SDCC_CLIENT_DEADLINE", 8*time.Second),
+		LookupTTL:         envInt("SDCC_LOOKUP_TTL", 3),
+		LearnFromLookup:   envBool("SDCC_LEARN_FROM_LOOKUP", true),
+		LearnFromHB:       envBool("SDCC_LEARN_FROM_HB", true),
+		ClientDeadline:    envDuration("SDCC_CLIENT_DEADLINE", 8*time.Second),
+		LookupNegCacheTTL: envDuration("SDCC_LOOKUP_NEGCACHE_TTL", 30*time.Second),
 
 		RPCA: envFloat("SDCC_RPC_A", 18),
 		RPCB: envFloat("SDCC_RPC_B", 3),
 
 		ClusterLogEvery: envDuration("SDCC_CLUSTER_LOG_EVERY", 10*time.Second),
+
+		RegistryMaxAttempts: envInt("SDCC_REGISTRY_MAX_ATTEMPTS", 10),
+
+		HBLightMaxHints: envInt("SDCC_HB_LIGHT_MAX_HINTS", 5), //
 	}
 }
 

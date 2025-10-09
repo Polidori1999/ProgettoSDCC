@@ -61,6 +61,7 @@ type Node struct {
 	lookupTTL       int
 	learnFromLookup bool
 	learnFromHB     bool // apprendere servizi dagli HB(full)
+	lookupNegTTL    time.Duration
 
 	// ---- FD gossip params (B,F,T) ----
 	fdB, fdF, fdT int
@@ -130,6 +131,7 @@ func NewNodeWithID(id, peerCSV, svcCSV string) *Node {
 		tickCluster:    cfg.ClusterLogEvery,
 		clientDeadline: cfg.ClientDeadline,
 	}
+
 	// Calcolo soglia quorum in base ai peer iniziali
 	n.updateQuorum()
 	return n
@@ -140,6 +142,11 @@ func (n *Node) SetGossipParams(B, F, T int) {
 	n.fdB, n.fdF, n.fdT = B, F, T
 	if n.FailureD != nil {
 		n.FailureD.SetGossipParams(B, F, T)
+	}
+}
+func (n *Node) SetLookupNegCacheTTL(d time.Duration) {
+	if d > 0 {
+		n.lookupNegTTL = d
 	}
 }
 
@@ -303,7 +310,7 @@ func (n *Node) Run(lookupSvc string) {
 	}
 	lm := NewLookupManager(n.PeerMgr, n.Registry, n.GossipM)
 	lm.SetLearnFromResponses(n.learnFromLookup)
-
+	lm.SetNegativeCacheTTL(n.lookupNegTTL)
 	n.udpConn = conn
 	defer conn.Close()
 

@@ -39,7 +39,13 @@ func NewLookupManager(pm *PeerManager, sr *ServiceRegistry, gm *GossipManager) *
 		negCache: make(map[string]time.Time),
 
 		learnFromResponses: true,
-		negCacheTTL:        30 * time.Second,
+		negCacheTTL:        30 * time.Second, //default
+	}
+}
+
+func (lm *LookupManager) SetNegativeCacheTTL(d time.Duration) {
+	if d > 0 {
+		lm.negCacheTTL = d
 	}
 }
 

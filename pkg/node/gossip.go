@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const MAX int = 5 // numero massimo di "peer hint" che includo negli heartbeat light
-
 // gestisco heartbeat (light/full) e spedizione via UDP ai peer.
 type GossipManager struct {
 	peers *PeerManager     // da qui leggo la lista dei peer
@@ -25,6 +23,8 @@ type GossipManager struct {
 	hintIdx    int           // indice di rotazione per peerhints se serve
 	lightEvery time.Duration // intervallo HB light
 	fullEvery  time.Duration // intervallo HB full
+
+	hintMax int // <-- NUOVO: numero max di peer hint nei light-HB
 }
 
 // costruisco il manager con dipendenze esplicite (peers, registry, self, rng).
@@ -35,6 +35,14 @@ func NewGossipManager(pm *PeerManager, reg *ServiceRegistry, selfID string, r *r
 		self:  selfID,
 		rnd:   r,
 	}
+}
+
+func (gm *GossipManager) SetLightMaxHints(max int) {
+	if max <= 0 {
+		gm.hintMax = 1
+		return
+	}
+	gm.hintMax = max
 }
 
 // avvio i ticker (light/full) e la goroutine che li ascolta.
@@ -78,7 +86,7 @@ func (gm *GossipManager) sendLightHB() {
 	hb := proto.Heartbeat{
 		Epoch:  gm.reg.LocalEpoch(),
 		SvcVer: gm.reg.LocalVersion(),
-		Peers:  gm.peerHints(MAX), // mando solo una finestra rotante di peer come "hint"
+		Peers:  gm.peerHints(gm.hintMax), // mando solo una finestra rotante di peer come "hint"
 	}
 	pkt, _ := proto.Encode(proto.MsgHeartbeatLight, gm.self, hb) //
 	gm.fanout(pkt)

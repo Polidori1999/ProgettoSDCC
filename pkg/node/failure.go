@@ -159,7 +159,7 @@ func (fd *FailureDetector) Start() {
 	fd.stopCh = ch
 	fd.mu.Unlock()
 
-	ticker := time.NewTicker(1 * time.Second) // TODO: rendere configurabile e aggiungere jitter
+	ticker := time.NewTicker(1 * time.Second)
 
 	go func(stop chan struct{}) {
 		defer ticker.Stop()
@@ -215,7 +215,7 @@ func (fd *FailureDetector) Start() {
 	}(ch)
 }
 
-// Stop: fermo la goroutine periodica se è attiva.
+// fermo la goroutine periodica se è attiva.
 func (fd *FailureDetector) Stop() {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()

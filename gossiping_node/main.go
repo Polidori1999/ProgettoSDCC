@@ -16,10 +16,9 @@ import (
 
 // fetchRegistry: contatto il registry via TCP e provo a farmi dare una lista di peer.
 // Ritorno la prima lista non vuota entro maxAttempts; se non trovo nulla, restituisco nil.
-func fetchRegistryPeers(regAddr, myID string) []string {
+func fetchRegistryPeers(regAddr, myID string, maxAttempts int) []string {
 	const (
-		maxAttempts = 10              // faccio al massimo 10 tentativi
-		wait        = 1 * time.Second // attendo 1s fra un tentativo e l'altro
+		wait = 1 * time.Second // attendo 1s fra un tentativo e l'altro
 	)
 
 	for i := 0; i < maxAttempts; i++ {
@@ -94,6 +93,19 @@ func main() {
 	servicesFlag := flag.String("services", "", "comma-separated local services")
 	svcCtrlFlag := flag.String("svc-ctrl", "", "Path del file di controllo servizi (opzionale)")
 
+	cfg := config.Load()
+	log.Printf("[CFG] HB(light=%v, full=%v) hintsMax=%d SUSPECT=%v DEAD=%v B=%d F=%d T=%d ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f) clusterLog=%v clientDeadline=%v lookupNegTTL=%v registryMaxAttempts=%v",
+		cfg.HBLightEvery, cfg.HBFullEvery,
+		cfg.HBLightMaxHints,
+		cfg.SuspectTimeout, cfg.DeadTimeout,
+		cfg.FDB, cfg.FDF, cfg.FDT,
+		cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
+		cfg.RepairEnabled, cfg.RepairEvery,
+		cfg.RPCA, cfg.RPCB,
+		cfg.ClusterLogEvery, cfg.ClientDeadline,
+		cfg.LookupNegCacheTTL,
+		cfg.RegistryMaxAttempts,
+	)
 	flag.Parse()
 
 	// Se non mi hanno passato --id, costruisco <hostname>:<port>
@@ -112,7 +124,7 @@ func main() {
 		} else {
 			log.Printf("[DBG] Faccio bootstrap dal registry %s…", *registryFlag)
 		}
-		peerList = fetchRegistryPeers(*registryFlag, id)
+		peerList = fetchRegistryPeers(*registryFlag, id, cfg.RegistryMaxAttempts)
 		log.Printf("[DBG] Peer iniziali dal registry: %v", peerList)
 		if len(peerList) == 0 {
 			// Non blocco l'avvio: posso usare comunque --peers o partire solo
@@ -132,16 +144,6 @@ func main() {
 	svcsCSV := strings.TrimSpace(*servicesFlag)
 
 	// Carico la configurazione da .env / variabili d'ambiente (evito costanti hardcoded)
-	cfg := config.Load()
-	log.Printf("[CFG] HB(light=%v, full=%v) SUSPECT=%v DEAD=%v B=%d F=%d T=%d ttl=%d learnHB=%t learnLookup=%t repair=%v/%v RPC=(%.2f,%.2f) clusterLog=%v clientDeadline=%v",
-		cfg.HBLightEvery, cfg.HBFullEvery,
-		cfg.SuspectTimeout, cfg.DeadTimeout,
-		cfg.FDB, cfg.FDF, cfg.FDT,
-		cfg.LookupTTL, cfg.LearnFromHB, cfg.LearnFromLookup,
-		cfg.RepairEnabled, cfg.RepairEvery,
-		cfg.RPCA, cfg.RPCB,
-		cfg.ClusterLogEvery, cfg.ClientDeadline,
-	)
 
 	// Creo il nodo con ID, peers iniziali (CSV) e servizi locali (CSV)
 	n := node.NewNodeWithID(id, peersCSV, svcsCSV)
@@ -151,7 +153,7 @@ func main() {
 
 	// Configuro gli intervalli di heartbeat (light/full) nel GossipManager PRIMA del Run
 	n.GossipM.SetHeartbeatIntervals(cfg.HBLightEvery, cfg.HBFullEvery)
-
+	n.GossipM.SetLightMaxHints(cfg.HBLightMaxHints)
 	// Configuro i timeout del FailureDetector (suspect/dead)
 	n.FailureD.SetTimeouts(cfg.SuspectTimeout, cfg.DeadTimeout)
 
@@ -159,6 +161,7 @@ func main() {
 	n.SetLookupTTL(cfg.LookupTTL)
 	n.SetLearnFromLookup(cfg.LearnFromLookup)
 	n.EnableRepair(cfg.RepairEnabled, cfg.RepairEvery)
+	n.SetLookupNegCacheTTL(cfg.LookupNegCacheTTL)
 
 	// Parametri per l'RPC dei servizi aritmetici + apprendimento dai full-HB
 	n.SetRPCParams(cfg.RPCA, cfg.RPCB)

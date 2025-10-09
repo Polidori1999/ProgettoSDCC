@@ -91,31 +91,58 @@ I servizi integrati sono: sum, sub, mul, div.
 
 --------
 Parametri configurabili
-=== Rumor-mongering (FD) ===
-SDCC_FD_B=3  
-SDCC_FD_F=2
-SDCC_FD_T=3
 
-=== Heartbeats ===
-SDCC_HB_LIGHT_EVERY=3s
-SDCC_HB_FULL_EVERY=9s
+=========================================
+Rumor-mongering (Failure Detector – B/F/T)
 
-=== Failure detector timeouts ===
-SDCC_SUSPECT_TIMEOUT=20s
-SDCC_DEAD_TIMEOUT=30s
+SDCC_FD_B=3 — fanout: quanti peer scelgo a ogni forward del rumor.
 
-=== Repair push–pull ===
-SDCC_REPAIR_ENABLED=false
-SDCC_REPAIR_EVERY=30s
+SDCC_FD_F=2 — MaxFw: quante volte al massimo un nodo può ri-inoltrare lo stesso rumor.
 
-=== Lookup ===
-SDCC_LOOKUP_TTL=3
-SDCC_LEARN_FROM_LOOKUP=true
-SDCC_LEARN_FROM_HB=true
+SDCC_FD_T=3 — TTL: hop budget massimo per il rumor.
 
-=== RPC (parametri dei servizi) ===
-SDCC_RPC_A=18
-SDCC_RPC_B=3
+Heartbeats
+
+SDCC_HB_LIGHT_EVERY=3s — intervallo tra heartbeat light.
+
+SDCC_HB_FULL_EVERY=9s — intervallo tra heartbeat full.
+
+SDCC_HB_LIGHT_MAX_HINTS=5 — max “peer hints” inseriti negli HB light (piccolo elenco di peer per aiutare il bootstrap/migliorare la connettività).
+
+Failure detector timeouts
+
+SDCC_SUSPECT_TIMEOUT=40s — quanto tempo senza segnali prima di marcare un peer come suspect.
+
+SDCC_DEAD_TIMEOUT=70s — quanto resta in suspect prima di passare a dead (deve essere > SUSPECT).
+
+Anti-entropy (repair push–pull)
+
+SDCC_REPAIR_ENABLED=false — abilita il ciclo periodico di repair.
+
+SDCC_REPAIR_EVERY=30s — frequenza del repair quando abilitato .
+
+Lookup (service discovery)
+
+SDCC_LOOKUP_TTL=3 — hop budget delle richieste lookup .
+
+SDCC_LEARN_FROM_LOOKUP=true — se true, il client aggiorna la registry apprendendo <service → provider> dalla prima risposta che riceve .
+
+SDCC_LEARN_FROM_HB=true — se true, apprende/aggiorna i provider osservando i full HB.
+
+SDCC_CLIENT_DEADLINE=8s — deadline lato client in modalità one-shot (--lookup): tempo massimo d’attesa prima di dire “service not found” .
+
+SDCC_LOOKUP_NEGCACHE_TTL=20s — negative cache TTL: se una lookup “scade” (TTL a 0) senza trovare provider, il nodo memorizza che quel servizio è “assente” e droppa richieste uguali fino a scadenza per evitare traffico inutile.
+
+RPC (servizi demo)
+
+SDCC_RPC_A=18 — parametro A per i servizi aritmetici d’esempio.
+
+SDCC_RPC_B=3 — parametro B per i servizi aritmetici d’esempio.
+
+Logging & bootstrap
+
+SDCC_CLUSTER_LOG_EVERY=10s — ogni quanto stampare il riepilogo cluster (>> Cluster ...). 
+SDCC_REGISTRY_MAX_ATTEMPTS=10 — tentativi massimi di bootstrap verso il registry prima di arrendersi.
 
 ---------
 Esperimenti
