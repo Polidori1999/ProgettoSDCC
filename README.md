@@ -92,96 +92,66 @@ I servizi integrati sono: sum, sub, mul, div.
 --------
 Parametri configurabili
 
-=========================================
-| Variabile   | Default (es.) | Descrizione                                                                            |
-| ----------- | ------------- | -------------------------------------------------------------------------------------- |
-| `SDCC_FD_B` | `3`           | **Fanout B**: quanti peer selezionare ad ogni inoltro del rumor.                       |
-| `SDCC_FD_F` | `2`           | **MaxFw F**: quante volte al massimo un nodo può re-inoltrare lo stesso rumor (dedup). |
-| `SDCC_FD_T` | `3`           | **TTL T**: hop budget massimo del rumor.                                               |
+Rumor-mongering (Failure Detector – B/F/T)
 
-
-| Variabile                 | Default (es.) | Descrizione                                                                               |
-| ------------------------- | ------------- | ----------------------------------------------------------------------------------------- |
-| `SDCC_HB_LIGHT_EVERY`     | `3s`          | Intervallo tra **HB light** (epoch/svcver + *peer hints*).                                |
-| `SDCC_HB_FULL_EVERY`      | `9s`          | Intervallo tra **HB full** (services + peer list completa).                               |
-| `SDCC_HB_LIGHT_MAX_HINTS` | `5`           | Max **peer hints** inseriti negli HB light (piccolo elenco per bootstrap/mixing overlay). |
-
-
-| Variabile              | Default (es.) | Descrizione                                                                                  |
-| ---------------------- | ------------- | -------------------------------------------------------------------------------------------- |
-| `SDCC_SUSPECT_TIMEOUT` | `40s`         | Quanto tempo senza segnali prima di marcare un peer come **suspect**.                        |
-| `SDCC_DEAD_TIMEOUT`    | `70s`         | Quanto resta in **suspect** prima di passare a **dead** (deve essere **> SUSPECT_TIMEOUT**). |
-
-
-| Variabile             | Default (es.) | Descrizione                                          |
-| --------------------- | ------------- | ---------------------------------------------------- |
-| `SDCC_REPAIR_ENABLED` | `false`       | Abilita/disabilita il ciclo periodico di **repair**. |
-| `SDCC_REPAIR_EVERY`   | `30s`         | Frequenza del repair quando abilitato.               |
-
-
-| Variabile                  | Default (es.) | Descrizione                                                                                                    |
-| -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------- |
-| `SDCC_LOOKUP_TTL`          | `3`           | Hop budget delle richieste **Lookup**.                                                                         |
-| `SDCC_LEARN_FROM_LOOKUP`   | `true`        | Se **true**, aggiorna la registry apprendendo `<service → provider>` dalla **prima** risposta ricevuta.        |
-| `SDCC_LEARN_FROM_HB`       | `true`        | Se **true**, apprendi/aggiorna i provider osservando gli **HB full**.                                          |
-| `SDCC_CLIENT_DEADLINE`     | `8s`          | Deadline lato client in modalità **one-shot** (`--lookup`): oltre, stampa “service not found”.                 |
-| `SDCC_LOOKUP_NEGCACHE_TTL` | `20s`         | **Negative cache TTL**: se una lookup scade (TTL a 0) senza provider, droppa richieste uguali fino a scadenza. |
-
-
-| Variabile    | Default (es.) | Descrizione                                      |
-| ------------ | ------------- | ------------------------------------------------ |
-| `SDCC_RPC_A` | `18`          | Parametro A per i servizi aritmetici di esempio. |
-| `SDCC_RPC_B` | `3`           | Parametro B per i servizi aritmetici di esempio. |
-
-
-| Variabile                    | Default (es.) | Descrizione                                                               |
-| ---------------------------- | ------------- | ------------------------------------------------------------------------- |
-| `SDCC_CLUSTER_LOG_EVERY`     | `10s`         | Ogni quanto stampare il riepilogo cluster (`>> Cluster ...`).             |
-| `SDCC_REGISTRY_MAX_ATTEMPTS` | `10`          | Tentativi massimi di bootstrap verso il **registry** prima di arrendersi. |
+| Variabile   | Valore | Descrizione                                                                            |
+| ----------- | ------ | -------------------------------------------------------------------------------------- |
+| `SDCC_FD_B` | `3`    | **Fanout B**: quanti peer selezionare ad ogni inoltro del rumor.                       |
+| `SDCC_FD_F` | `2`    | **MaxFw F**: quante volte al massimo un nodo può re-inoltrare lo stesso rumor (dedup). |
+| `SDCC_FD_T` | `3`    | **TTL T**: hop budget massimo del rumor.                                               |
 
 
 Heartbeats
 
-SDCC_HB_LIGHT_EVERY=3s — intervallo tra heartbeat light.
+| Variabile                 | Valore | Descrizione                                                                               |
+| ------------------------- | ------ | ----------------------------------------------------------------------------------------- |
+| `SDCC_HB_LIGHT_EVERY`     | `3s`   | Intervallo tra **HB light** (epoch/svcver + *peer hints*).                                |
+| `SDCC_HB_FULL_EVERY`      | `9s`   | Intervallo tra **HB full** (services + peer list completa).                               |
+| `SDCC_HB_LIGHT_MAX_HINTS` | `5`    | Max **peer hints** inseriti negli HB light (piccolo elenco per bootstrap/mixing overlay). |
 
-SDCC_HB_FULL_EVERY=9s — intervallo tra heartbeat full.
 
-SDCC_HB_LIGHT_MAX_HINTS=5 — max “peer hints” inseriti negli HB light (piccolo elenco di peer per aiutare il bootstrap/migliorare la connettività).
+Failure detector: timeouts
 
-Failure detector timeouts
+| Variabile              | Valore | Descrizione                                                                                  |
+| ---------------------- | ------ | -------------------------------------------------------------------------------------------- |
+| `SDCC_SUSPECT_TIMEOUT` | `40s`  | Quanto tempo senza segnali prima di marcare un peer come **suspect**.                        |
+| `SDCC_DEAD_TIMEOUT`    | `70s`  | Quanto resta in **suspect** prima di passare a **dead** (deve essere **> SUSPECT_TIMEOUT**). |
 
-SDCC_SUSPECT_TIMEOUT=40s — quanto tempo senza segnali prima di marcare un peer come suspect.
-
-SDCC_DEAD_TIMEOUT=70s — quanto resta in suspect prima di passare a dead (deve essere > SUSPECT).
 
 Anti-entropy (repair push–pull)
 
-SDCC_REPAIR_ENABLED=false — abilita il ciclo periodico di repair.
+| Variabile             | Valore  | Descrizione                                          |
+| --------------------- | ------- | ---------------------------------------------------- |
+| `SDCC_REPAIR_ENABLED` | `false` | Abilita/disabilita il ciclo periodico di **repair**. |
+| `SDCC_REPAIR_EVERY`   | `30s`   | Frequenza del repair quando abilitato.               |
 
-SDCC_REPAIR_EVERY=30s — frequenza del repair quando abilitato .
 
-Lookup (service discovery)
+Lookup
 
-SDCC_LOOKUP_TTL=3 — hop budget delle richieste lookup .
+| Variabile                  | Valore | Descrizione                                                                                                    |
+| -------------------------- | ------ | -------------------------------------------------------------------------------------------------------------- |
+| `SDCC_LOOKUP_TTL`          | `3`    | Hop budget delle richieste **Lookup**.                                                                         |
+| `SDCC_LEARN_FROM_LOOKUP`   | `true` | Se **true**, aggiorna la registry apprendendo `<service → provider>` dalla **prima** risposta ricevuta.        |
+| `SDCC_LEARN_FROM_HB`       | `true` | Se **true**, apprendi/aggiorna i provider osservando gli **HB full**.                                          |
+| `SDCC_CLIENT_DEADLINE`     | `8s`   | Deadline lato client in modalità **one-shot** (`--lookup`): oltre, stampa “service not found”.                 |
+| `SDCC_LOOKUP_NEGCACHE_TTL` | `20s`  | **Negative cache TTL**: se una lookup scade (TTL a 0) senza provider, droppa richieste uguali fino a scadenza. |
 
-SDCC_LEARN_FROM_LOOKUP=true — se true, il client aggiorna la registry apprendendo <service → provider> dalla prima risposta che riceve .
 
-SDCC_LEARN_FROM_HB=true — se true, apprende/aggiorna i provider osservando i full HB.
+Valore servizi demo
 
-SDCC_CLIENT_DEADLINE=8s — deadline lato client in modalità one-shot (--lookup): tempo massimo d’attesa prima di dire “service not found” .
+| Variabile    | Valore | Descrizione                                      |
+| ------------ | ------ | ------------------------------------------------ |
+| `SDCC_RPC_A` | `18`   | Parametro A per i servizi aritmetici di esempio. |
+| `SDCC_RPC_B` | `3`    | Parametro B per i servizi aritmetici di esempio. |
 
-SDCC_LOOKUP_NEGCACHE_TTL=20s — negative cache TTL: se una lookup “scade” (TTL a 0) senza trovare provider, il nodo memorizza che quel servizio è “assente” e droppa richieste uguali fino a scadenza per evitare traffico inutile.
 
-RPC (servizi demo)
+Logging e bootstrap
 
-SDCC_RPC_A=18 — parametro A per i servizi aritmetici d’esempio.
+| Variabile                    | Valore | Descrizione                                                               |
+| ---------------------------- | ------ | ------------------------------------------------------------------------- |
+| `SDCC_CLUSTER_LOG_EVERY`     | `10s`  | Ogni quanto stampare il riepilogo cluster (`>> Cluster ...`).             |
+| `SDCC_REGISTRY_MAX_ATTEMPTS` | `10`   | Tentativi massimi di bootstrap verso il **registry** prima di arrendersi. |
 
-SDCC_RPC_B=3 — parametro B per i servizi aritmetici d’esempio.
-
-Logging & bootstrap
-
-SDCC_CLUSTER_LOG_EVERY=10s — ogni quanto stampare il riepilogo cluster (>> Cluster ...). 
-SDCC_REGISTRY_MAX_ATTEMPTS=10 — tentativi massimi di bootstrap verso il registry prima di arrendersi.
 
 ---------
 Esperimenti
