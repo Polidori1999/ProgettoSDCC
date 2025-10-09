@@ -363,7 +363,7 @@ func (n *Node) handleLeave(env proto.Envelope, lv proto.Leave) {
 	}
 }
 
-// quickProbe invia un RepairReq al target e attende per un breve intervallo
+// invia un RepairReq al target e attende per un breve intervallo
 // che il LastSeen del target avanzi (segno che ci ha risposto con un HB(full)).
 // Restituisce true se ha avuto segni di vita entro 'wait'.
 func (n *Node) quickProbe(target string, wait time.Duration) bool {

@@ -19,7 +19,7 @@ services:
     <<: *node-common
     build: .
     container_name: node1
-    command: ["--id=node1:9001","--port=9001","--registry=registry:9000","--services=","--svc-ctrl=/tmp/services.ctrl"]
+    command: ["--id=node1:9001","--port=9001","--registry=registry:9000","--services=sum","--svc-ctrl=/tmp/services.ctrl"]
     ports: ["9001:9001/udp"]
     # volumes: ["./svcc/node1:/tmp/services.ctrl"]
 

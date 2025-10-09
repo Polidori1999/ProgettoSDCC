@@ -49,7 +49,7 @@ Come Avviare il Progetto (con Docker Compose)
    ```bash
    docker compose down --remove-orphans
 
-   ------------
+------------
 ⚙️ Flag CLI principali (binario gossip-node)
 
 --id (obbligatorio): identificatore host:port del nodo (es. node1:9001)
@@ -112,12 +112,12 @@ Heartbeats
 
 Failure detector: timeouts
 
-| Variabile              | Valore | Descrizione                                                                                  |
-| ---------------------- | ------ | -------------------------------------------------------------------------------------------- |
-| `SDCC_SUSPECT_TIMEOUT` | `40s`  | Quanto tempo senza segnali prima di marcare un peer come **suspect**.                        |
-| `SDCC_DEAD_TIMEOUT`    | `70s`  | Quanto resta in **suspect** prima di passare a **dead** (deve essere **> SUSPECT_TIMEOUT**). |
+| Variabile              | Valore | Descrizione                                                                                        |
+| ---------------------- |--------|----------------------------------------------------------------------------------------------------|
+| `SDCC_SUSPECT_TIMEOUT` | `30s`  | Quanto tempo senza segnali prima di marcare un peer come **suspect**.                              |
+| `SDCC_DEAD_TIMEOUT`    | `36s`  | Alive window oltre questa finestra il peer viene considerato morto per la partecipazione al quorum |
 
-
+e
 Anti-entropy (repair push–pull)
 
 | Variabile             | Valore  | Descrizione                                          |
