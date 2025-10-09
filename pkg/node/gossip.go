@@ -100,7 +100,7 @@ func (gm *GossipManager) sendFullHB() {
 		Services: gm.reg.LocalServices(),
 		Peers:    gm.peers.List(),
 	}
-	pkt, _ := proto.Encode(proto.MsgHeartbeat, gm.self, hb) // TODO: come sopra, valutare log errori di Encode
+	pkt, _ := proto.Encode(proto.MsgHeartbeat, gm.self, hb)
 	gm.fanout(pkt)
 }
 
@@ -175,7 +175,7 @@ func (gm *GossipManager) peerHints(max int) []string {
 	return out
 }
 
-// imposto gli intervalli (devo chiamarlo prima di Start).
+// imposto gli intervalli.
 func (g *GossipManager) SetHeartbeatIntervals(light, full time.Duration) {
 	if light > 0 {
 		g.lightEvery = light
